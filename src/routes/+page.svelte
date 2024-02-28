@@ -1,3 +1,33 @@
+<script lang="ts">
+	import { onMount } from 'svelte';
+	const host = 'localhost:8080';
+
+	onMount(() => {
+		console.log('Hello from +page.svelte');
+
+		let ws = new WebSocket(`ws://${host}/ws`);
+		ws.onopen = () => {
+			console.log('Connected to server');
+			ws.send(
+				JSON.stringify({
+					CreateRoom: {
+						name: 'arjun'
+					}
+				})
+			);
+		};
+
+		ws.onmessage = (event) => {
+			let data = JSON.parse(event.data);
+			console.log('Message from server', data);
+		};
+
+		ws.onclose = () => {
+			console.log('Disconnected from server');
+		};
+	});
+</script>
+
 <!-- YOU CAN DELETE EVERYTHING IN THIS PAGE -->
 
 <div class="container h-full mx-auto flex justify-center items-center">
