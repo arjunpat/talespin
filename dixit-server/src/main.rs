@@ -8,7 +8,8 @@ use axum::{
     Router,
 };
 use dashmap::DashMap;
-use std::{net::SocketAddr, sync::Arc};
+use std::{fs, net::SocketAddr, sync::Arc};
+
 mod room;
 
 use rand::distributions::{Distribution, Uniform};
@@ -18,18 +19,30 @@ use room::Room;
 #[derive(Debug, Clone)]
 struct ServerState {
     rooms: Arc<DashMap<String, Arc<Room>>>,
+    cards: Vec<String>,
 }
 
 impl ServerState {
-    fn new() -> Self {
-        ServerState {
+    fn new() -> Result<Self> {
+        // read cards and form array of file names, any file is ok
+        let cards: Vec<String> = fs::read_dir("../static/cards/")?
+            .map(|res| res.map(|e| e.file_name().into_string().unwrap()))
+            .map(|res| res.unwrap())
+            .filter(|s| s.ends_with(".jpg") || s.ends_with(".jpeg") || s.ends_with(".png"))
+            .collect();
+
+        println!("Loaded {} cards", cards.len());
+
+        Ok(ServerState {
             rooms: Arc::new(DashMap::new()),
-        }
+            cards,
+        })
     }
 
     async fn create_room(&self) -> Result<String> {
         let room_id = generate_room_id(4);
-        let room = Room::new(&room_id);
+
+        let room = Room::new(&room_id, self.cards.clone());
         self.rooms.insert(room_id.clone(), Arc::new(room));
         Ok(room_id)
     }
@@ -39,7 +52,7 @@ impl ServerState {
             .rooms
             .get(room_id)
             .ok_or_else(|| anyhow!("Room not found"))?;
-        room.handle_join(socket, name).await;
+        room.on_connection(socket, name).await;
         Ok(())
     }
 }
@@ -54,7 +67,7 @@ fn generate_room_id(length: usize) -> String {
 
 #[tokio::main]
 async fn main() {
-    let state = ServerState::new();
+    let state = ServerState::new().unwrap();
 
     let app = Router::new()
         .route("/ws", get(ws_handler))
