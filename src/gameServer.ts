@@ -1,4 +1,4 @@
-const host = 'localhost:8080';
+const host = '10.11.8.120:8080';
 import { nameStore } from "$lib/store";
 
 class GameServer {
@@ -53,12 +53,6 @@ class GameServer {
         }
     }
 
-    ping() {
-        console.log('sending ping');
-        this.send({
-            Ping: {}
-        });
-    }
 
     send(data: object) {
         let data_str = JSON.stringify(data);

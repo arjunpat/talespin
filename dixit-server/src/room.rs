@@ -320,6 +320,11 @@ impl Room {
                     state.current_description = description.to_string();
                     state.stage = RoomStage::PlayersChoose;
 
+                    // record choice
+                    state
+                        .player_to_current_card
+                        .insert(name.to_string(), card.to_string());
+
                     // notify players of the active player's choice
                     for player in state.player_order.iter() {
                         let _ = self

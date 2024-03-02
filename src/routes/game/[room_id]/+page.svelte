@@ -66,50 +66,48 @@
 				stage = 'PlayersChoose';
 				displayImages = data.PlayersChoose.hand;
 				descriptionBox = data.PlayersChoose.description;
-				let answerDeadline = data.PlayersChoose.deadline;
-				let issued = Date.now();
+				// let answerDeadline = data.PlayersChoose.deadline;
+				// let issued = Date.now();
 
-				function updateProgressBar() {
-					progressBarPercentage = (Date.now() - issued) / (answerDeadline - issued);
+				// function updateProgressBar() {
+				// 	progressBarPercentage = (Date.now() - issued) / (answerDeadline - issued);
 
-					if (
-						typeof progressBarPercentage === 'number' &&
-						progressBarPercentage <= 1 &&
-						progressBarPercentage >= 0
-					) {
-						setTimeout(updateProgressBar, 50);
-					} else {
-						progressBarPercentage = null;
-						setTimeout(() => gameServer.ping(), 500);
-					}
-				}
+				// 	if (
+				// 		typeof progressBarPercentage === 'number' &&
+				// 		progressBarPercentage <= 1 &&
+				// 		progressBarPercentage >= 0
+				// 	) {
+				// 		setTimeout(updateProgressBar, 50);
+				// 	} else {
+				// 		progressBarPercentage = null;
+				// 	}
+				// }
 
-				updateProgressBar();
+				// updateProgressBar();
 			} else if (data.BeginVoting) {
 				stage = 'Voting';
 				displayImages = data.BeginVoting.center_cards;
 				descriptionBox = data.BeginVoting.description;
 
-				let answerDeadline = data.BeginVoting.deadline;
-				let issued = Date.now();
+				// let answerDeadline = data.BeginVoting.deadline;
+				// let issued = Date.now();
 				selectedImage = '';
 
-				function updateProgressBar() {
-					progressBarPercentage = (Date.now() - issued) / (answerDeadline - issued);
+				// function updateProgressBar() {
+				// 	progressBarPercentage = (Date.now() - issued) / (answerDeadline - issued);
 
-					if (
-						typeof progressBarPercentage === 'number' &&
-						progressBarPercentage <= 1 &&
-						progressBarPercentage >= 0
-					) {
-						setTimeout(updateProgressBar, 50);
-					} else {
-						progressBarPercentage = null;
-						setTimeout(() => gameServer.ping(), 500);
-					}
-				}
+				// 	if (
+				// 		typeof progressBarPercentage === 'number' &&
+				// 		progressBarPercentage <= 1 &&
+				// 		progressBarPercentage >= 0
+				// 	) {
+				// 		setTimeout(updateProgressBar, 50);
+				// 	} else {
+				// 		progressBarPercentage = null;
+				// 	}
+				// }
 
-				updateProgressBar();
+				// updateProgressBar();
 			} else if (data.Results) {
 				stage = 'Results';
 				displayImages = Object.values(data.Results.player_to_current_card);
@@ -224,12 +222,14 @@
 			<div class="mt-5">
 				<ul>
 					{#each playerOrder as player}
-						<li>
-							<span>
-								{players[player].ready ? '✔️ ' : ''}
-								{player}
-							</span>
-						</li>
+						{#if player !== activePlayer}
+							<li>
+								<span>
+									{players[player].ready ? '✔️ ' : ''}
+									{player}
+								</span>
+							</li>
+						{/if}
 					{/each}
 				</ul>
 			</div>
@@ -290,11 +290,11 @@
 							alt="You can't play this game without the images!"
 						/>
 						{#if card_to_voters[image]}
-							{#each card_to_voters[image] as voter}
-								<div style="position: absolute; bottom: 36px; right: 12px;" class="bg-black">
-									{voter}
-								</div>
-							{/each}
+							<!-- {#each card_to_voters[image] as voter} -->
+							<div style="position: absolute; bottom: 36px; right: 12px;" class="bg-black">
+								{card_to_voters[image].join(', ')}
+							</div>
+							<!-- {/each} -->
 						{/if}
 						<div class="bg-black p-1">{card_to_player[image]}'s card</div>
 					</div>
