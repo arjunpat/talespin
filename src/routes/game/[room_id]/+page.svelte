@@ -9,6 +9,7 @@
 	interface PlayerInfo {
 		active: boolean;
 		points: number;
+		ready: boolean;
 	}
 	interface Deadline {
 		issued: number;
@@ -221,6 +222,19 @@
 
 		{#if stage === 'PlayersChoose'}
 			<div class="mt-5">
+				<ul>
+					{#each playerOrder as player}
+						<li>
+							<span>
+								{players[player].ready ? '✔️ ' : ''}
+								{player}
+							</span>
+						</li>
+					{/each}
+				</ul>
+			</div>
+
+			<div class="mt-5">
 				{#if activePlayer === name}
 					<p>Waiting for players to choose their cards!</p>
 				{:else}
@@ -237,6 +251,18 @@
 		{/if}
 
 		{#if stage === 'Voting'}
+			<div class="mt-5">
+				<ul>
+					{#each playerOrder as player}
+						<li>
+							<span>
+								{players[player].ready ? '✔️ ' : ''}
+								{player}
+							</span>
+						</li>
+					{/each}
+				</ul>
+			</div>
 			<div class="mt-5">
 				{#if activePlayer === name}
 					<p>Waiting for players to vote!</p>
@@ -262,11 +288,11 @@
 							alt="You can't play this game without the images!"
 						/>
 						{#each card_to_voters[image] as voter}
-							<div style="position: absolute; bottom: 28px; right: 12px;" class="bg-black">
+							<div style="position: absolute; bottom: 36px; right: 12px;" class="bg-black">
 								{voter}
 							</div>
 						{/each}
-						<div class="bg-black">{card_to_player[image]}'s card</div>
+						<div class="bg-black p-1">{card_to_player[image]}'s card</div>
 					</div>
 				{/each}
 			</section>

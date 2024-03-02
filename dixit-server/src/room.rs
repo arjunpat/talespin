@@ -68,6 +68,7 @@ pub enum RoomStage {
 pub struct PlayerInfo {
     active: bool,
     points: u16,
+    ready: bool, // this is round dependent
 }
 
 #[derive(Debug)]
@@ -194,6 +195,8 @@ impl Room {
                         }
                     }
 
+                    self.clear_ready(&mut state);
+
                     // remove cards from hand that were put in the center
                     for (player, card) in state.player_to_current_card.clone().iter() {
                         if let Some(hand) = state.player_hand.get_mut(player) {
@@ -213,6 +216,8 @@ impl Room {
                         .values()
                         .map(|e| e.to_string())
                         .collect();
+
+                    self.clear_ready(&mut state);
 
                     // choose random card to vote for if the player didn't choose
                     for player in state.player_order.clone().iter() {
@@ -301,6 +306,7 @@ impl Room {
                         }
                     }
 
+                    self.clear_ready(&mut state);
                     self.broadcast_msg(self.room_state(&state))?;
                 }
             }
@@ -344,6 +350,10 @@ impl Room {
                         state
                             .player_to_current_card
                             .insert(name.to_string(), card.to_string());
+
+                        // ready
+                        state.players.get_mut(name).unwrap().ready = true;
+                        self.broadcast_msg(self.room_state(&state))?;
                     }
                 }
             }
@@ -377,6 +387,10 @@ impl Room {
                     state
                         .player_to_vote
                         .insert(name.to_string(), card.to_string());
+
+                    // ready
+                    state.players.get_mut(name).unwrap().ready = true;
+                    self.broadcast_msg(self.room_state(&state))?;
                 }
             }
             _ => {
@@ -489,6 +503,7 @@ impl Room {
                     PlayerInfo {
                         active: true,
                         points: 0,
+                        ready: false,
                     },
                 );
             } else {
@@ -556,6 +571,12 @@ impl Room {
             self.broadcast.send(msg)?;
         }
         Ok(())
+    }
+
+    fn clear_ready(&self, state: &mut RwLockWriteGuard<RoomState>) {
+        for (_, player) in state.players.iter_mut() {
+            player.ready = false;
+        }
     }
 
     fn room_state(&self, state: &RwLockWriteGuard<RoomState>) -> ServerMsg {
