@@ -19,12 +19,10 @@ pub enum ServerMsg {
     },
     PlayersChoose {
         description: String,
-        deadline: u128,
         hand: Vec<String>,
     },
     BeginVoting {
         center_cards: Vec<String>,
-        deadline: u128,
         description: String,
     },
     Results {
@@ -84,14 +82,6 @@ struct RoomState {
     current_description: String,
     player_to_current_card: HashMap<String, String>,
     player_to_vote: HashMap<String, String>,
-    answer_deadline: u128,
-}
-
-fn get_time() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis()
 }
 
 // main object representing a game
@@ -117,7 +107,6 @@ impl Room {
             current_description: "".to_string(),
             player_to_current_card: HashMap::new(),
             player_to_vote: HashMap::new(),
-            answer_deadline: u128::MAX,
         };
 
         let (tx, _) = broadcast::channel(10);
@@ -139,23 +128,12 @@ impl Room {
             }),
             RoomStage::PlayersChoose => Ok(ServerMsg::PlayersChoose {
                 description: state.current_description.clone(),
-                deadline: state.answer_deadline,
                 hand: state.player_hand.get(name.unwrap()).unwrap().clone(),
             }),
-            RoomStage::Voting => {
-                let mut center_cards: Vec<String> = state
-                    .player_to_current_card
-                    .values()
-                    .map(|e| e.to_string())
-                    .collect();
-                center_cards.shuffle(&mut rand::thread_rng());
-
-                Ok(ServerMsg::BeginVoting {
-                    center_cards,
-                    deadline: state.answer_deadline,
-                    description: state.current_description.clone(),
-                })
-            }
+            RoomStage::Voting => Ok(ServerMsg::BeginVoting {
+                center_cards: self.get_center_cards(state),
+                description: state.current_description.clone(),
+            }),
             RoomStage::Results => Ok(ServerMsg::Results {
                 player_to_vote: state.player_to_vote.clone(),
                 player_to_current_card: state.player_to_current_card.clone(),
@@ -170,86 +148,94 @@ impl Room {
         };
     }
 
-    pub async fn handle_client_msg(&self, name: &str, msg: WsMessage) -> Result<()> {
-        let mut state = self.state.write().await;
-        {
-            // check if answer deadline has passed
-            if state.answer_deadline < get_time() {
-                if matches!(state.stage, RoomStage::PlayersChoose) {
-                    state.stage = RoomStage::Voting;
+    fn get_center_cards(&self, state: &RwLockWriteGuard<RoomState>) -> Vec<String> {
+        let mut center_cards: Vec<String> = state
+            .player_to_current_card
+            .values()
+            .map(|e| e.to_string())
+            .collect();
+        center_cards.shuffle(&mut rand::thread_rng());
+        center_cards
+    }
 
-                    // choose random card for those who didn't choose by the deadline
-                    for player in state.player_order.clone().iter() {
-                        if !state.player_to_current_card.contains_key(player) {
-                            let mut rng = rand::thread_rng();
-                            let card = state
-                                .player_hand
-                                .get(player)
-                                .unwrap()
-                                .choose(&mut rng)
-                                .unwrap()
-                                .clone();
-                            state
-                                .player_to_current_card
-                                .insert(player.to_string(), card);
-                        }
-                    }
+    fn init_voting(&self, state: &mut RwLockWriteGuard<RoomState>) -> Result<()> {
+        state.stage = RoomStage::Voting;
 
-                    self.clear_ready(&mut state);
+        // choose random card for those who didn't choose by the deadline
+        for player in state.player_order.clone().iter() {
+            if !state.player_to_current_card.contains_key(player) {
+                let mut rng = rand::thread_rng();
+                let card = state
+                    .player_hand
+                    .get(player)
+                    .unwrap()
+                    .choose(&mut rng)
+                    .unwrap()
+                    .clone();
+                state
+                    .player_to_current_card
+                    .insert(player.to_string(), card);
+            }
+        }
 
-                    // remove cards from hand that were put in the center
-                    for (player, card) in state.player_to_current_card.clone().iter() {
-                        if let Some(hand) = state.player_hand.get_mut(player) {
-                            if let Some(pos) = hand.iter().position(|e| e == card) {
-                                hand.remove(pos);
-                            }
-                        }
-                    }
+        self.clear_ready(state);
 
-                    state.answer_deadline = 120e3 as u128 + get_time();
-                    self.broadcast_msg(self.get_msg(None, &state)?)?;
-                } else if matches!(state.stage, RoomStage::Voting) {
-                    state.stage = RoomStage::Results;
-
-                    let center_cards: Vec<String> = state
-                        .player_to_current_card
-                        .values()
-                        .map(|e| e.to_string())
-                        .collect();
-
-                    self.clear_ready(&mut state);
-
-                    // choose random card to vote for if the player didn't choose
-                    for player in state.player_order.clone().iter() {
-                        if !state.player_to_vote.contains_key(player) {
-                            // rand int 0 to 5
-                            let mut rng = rand::thread_rng();
-                            let mut card = center_cards.choose(&mut rng).unwrap().clone();
-
-                            // ensure player cannot choose their own card
-                            while &card == state.player_to_current_card.get(player).unwrap() {
-                                card = center_cards.choose(&mut rng).unwrap().clone();
-                            }
-
-                            state.player_to_vote.insert(player.to_string(), card);
-                        }
-                    }
-
-                    let point_change = self.compute_results(&mut state);
-
-                    // update with the point change
-                    state.players.iter_mut().for_each(|(player, info)| {
-                        if let Some(points) = point_change.get(player) {
-                            info.points += points;
-                        }
-                    });
-
-                    // send results to everyone
-                    self.broadcast_msg(self.get_msg(None, &state)?)?;
-                    self.broadcast_msg(self.room_state(&state))?;
+        // remove cards from hand that were put in the center
+        for (player, card) in state.player_to_current_card.clone().iter() {
+            if let Some(hand) = state.player_hand.get_mut(player) {
+                if let Some(pos) = hand.iter().position(|e| e == card) {
+                    hand.remove(pos);
                 }
             }
         }
+
+        self.broadcast_msg(self.get_msg(None, &state)?)?;
+        self.broadcast_msg(self.room_state(&state))?;
+
+        Ok(())
+    }
+
+    fn init_results(&self, state: &mut RwLockWriteGuard<RoomState>) -> Result<()> {
+        state.stage = RoomStage::Results;
+
+        let center_cards = self.get_center_cards(state);
+
+        // choose random card to vote for if the player didn't choose
+        for player in state.player_order.clone().iter() {
+            if player != &state.player_order[state.active_player]
+                && !state.player_to_vote.contains_key(player)
+            {
+                // rand int 0 to 5
+                let mut rng = rand::thread_rng();
+                let mut card = center_cards.choose(&mut rng).unwrap().clone();
+
+                // ensure player cannot choose their own card
+                while &card == state.player_to_current_card.get(player).unwrap() {
+                    card = center_cards.choose(&mut rng).unwrap().clone();
+                }
+
+                state.player_to_vote.insert(player.to_string(), card);
+            }
+        }
+
+        let point_change = self.compute_results(state);
+
+        // update with the point change
+        state.players.iter_mut().for_each(|(player, info)| {
+            if let Some(points) = point_change.get(player) {
+                info.points += points;
+            }
+        });
+
+        // send results to everyone
+        self.broadcast_msg(self.get_msg(None, &state)?)?;
+        self.broadcast_msg(self.room_state(&state))?;
+
+        Ok(())
+    }
+
+    pub async fn handle_client_msg(&self, name: &str, msg: WsMessage) -> Result<()> {
+        let mut state = self.state.write().await;
 
         let msg: ClientMsg = serde_json::from_str(msg.to_text()?)
             .context(format!("Failed to deserialize client msg: {:?}", msg))?;
@@ -301,9 +287,9 @@ impl Room {
 
                     // notify players of the game start and their hands
                     for player in state.player_order.iter() {
-                        if let Some(tx) = state.player_to_socket.get(player) {
-                            tx.send(self.get_msg(Some(&player), &state)?).await?;
-                        }
+                        let _ = self
+                            .send_msg(&state, &player, self.get_msg(Some(&player), &state)?)
+                            .await;
                     }
 
                     self.clear_ready(&mut state);
@@ -311,31 +297,38 @@ impl Room {
                 }
             }
             ClientMsg::ActivePlayerChooseCard { card, description } => {
-                if matches!(state.stage, RoomStage::ActiveChooses) {
-                    if state.player_order[state.active_player] == name {
-                        // verify that player has this card
-                        if !state.player_hand.get(name).unwrap().contains(&card) {
-                            return Err(anyhow!("Invalid card chosen by active player"));
-                        }
-
-                        let description = description.trim();
-                        // verify that the description is not empty and is one word
-                        if description.is_empty() || description.contains(' ') {
-                            return Err(anyhow!("Invalid description chosen by active player"));
-                        }
-                        state.current_description = description.to_string();
-                        state.answer_deadline = 20e3 as u128 + get_time();
-                        state.stage = RoomStage::PlayersChoose;
-
-                        // notify players of the active player's choice
-                        for player in state.player_order.iter() {
-                            if let Some(tx) = state.player_to_socket.get(player) {
-                                tx.send(self.get_msg(Some(&player), &state)?).await?;
-                            }
-                        }
-
-                        self.broadcast_msg(self.room_state(&state))?;
+                if matches!(state.stage, RoomStage::ActiveChooses)
+                    && state.player_order[state.active_player] == name
+                {
+                    // verify that player has this card
+                    if !state.player_hand[name].contains(&card) {
+                        return Err(anyhow!("Invalid card chosen by active player"));
                     }
+
+                    let description = description.trim();
+                    // verify that the description is not empty and is one word
+                    if description.is_empty() || description.contains(' ') {
+                        if let Some(tx) = state.player_to_socket.get(name) {
+                            tx.send(
+                                ServerMsg::Error("Description cannot contain spaces!".to_string())
+                                    .into(),
+                            )
+                            .await?;
+                        }
+                        return Ok(());
+                    }
+                    state.current_description = description.to_string();
+                    state.stage = RoomStage::PlayersChoose;
+
+                    // notify players of the active player's choice
+                    for player in state.player_order.iter() {
+                        let _ = self
+                            .send_msg(&state, &player, self.get_msg(Some(&player), &state)?)
+                            .await;
+                    }
+
+                    self.clear_ready(&mut state);
+                    self.broadcast_msg(self.room_state(&state))?;
                 }
             }
             ClientMsg::PlayerChooseCard { card } => {
@@ -354,13 +347,25 @@ impl Room {
                         // ready
                         state.players.get_mut(name).unwrap().ready = true;
                         self.broadcast_msg(self.room_state(&state))?;
+
+                        // check if everyone except for the active player is ready
+                        if state.players.values().filter(|p| p.ready).count()
+                            == state.players.len() - 1
+                        {
+                            self.init_voting(&mut state)?;
+                        }
                     }
                 }
             }
             ClientMsg::Vote { card } => {
                 if matches!(state.stage, RoomStage::Voting) {
                     // verify that the player is not the active player
-                    if state.player_order[state.active_player] != name {
+                    if state.player_order[state.active_player] == name {
+                        println!(
+                            "{} is the active player",
+                            state.player_order[state.active_player]
+                        );
+                        println!("{} is trying to vote", name);
                         return Err(anyhow!("Active player cannot vote"));
                     }
 
@@ -391,6 +396,12 @@ impl Room {
                     // ready
                     state.players.get_mut(name).unwrap().ready = true;
                     self.broadcast_msg(self.room_state(&state))?;
+
+                    // check if everyone except for the active player is ready
+                    if state.players.values().filter(|p| p.ready).count() == state.players.len() - 1
+                    {
+                        self.init_results(&mut state)?;
+                    }
                 }
             }
             _ => {
@@ -462,7 +473,7 @@ impl Room {
         state.player_to_socket.remove(name);
 
         if let Err(e) = res {
-            println!("Error in handle_join: {:?}", e);
+            println!("Error in run_ws_loop: {:?}", e);
         }
 
         if let Err(e) = self.broadcast_msg(self.room_state(&state)) {
@@ -570,6 +581,21 @@ impl Room {
         if self.broadcast.receiver_count() != 0 {
             self.broadcast.send(msg)?;
         }
+        Ok(())
+    }
+
+    async fn send_msg(
+        &self,
+        state: &RwLockWriteGuard<'_, RoomState>,
+        name: &str,
+        msg: ServerMsg,
+    ) -> Result<()> {
+        let socket = state.player_to_socket.get(name).ok_or_else(|| {
+            println!("Cannot find socket for {}", name);
+            anyhow!("Cannot find socket for {}", name)
+        })?;
+
+        socket.send(msg.into()).await?;
         Ok(())
     }
 

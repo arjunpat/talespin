@@ -254,12 +254,14 @@
 			<div class="mt-5">
 				<ul>
 					{#each playerOrder as player}
-						<li>
-							<span>
-								{players[player].ready ? '✔️ ' : ''}
-								{player}
-							</span>
-						</li>
+						{#if player !== activePlayer}
+							<li>
+								<span>
+									{players[player].ready ? '✔️ ' : ''}
+									{player}
+								</span>
+							</li>
+						{/if}
 					{/each}
 				</ul>
 			</div>
@@ -287,11 +289,13 @@
 							src="../../assets/cards/{image}"
 							alt="You can't play this game without the images!"
 						/>
-						{#each card_to_voters[image] as voter}
-							<div style="position: absolute; bottom: 36px; right: 12px;" class="bg-black">
-								{voter}
-							</div>
-						{/each}
+						{#if card_to_voters[image]}
+							{#each card_to_voters[image] as voter}
+								<div style="position: absolute; bottom: 36px; right: 12px;" class="bg-black">
+									{voter}
+								</div>
+							{/each}
+						{/if}
 						<div class="bg-black p-1">{card_to_player[image]}'s card</div>
 					</div>
 				{/each}
