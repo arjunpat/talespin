@@ -11,22 +11,25 @@ pub enum ServerMsg {
         room_id: String,
         players: HashMap<String, PlayerInfo>,
         stage: RoomStage,
+        active_player: Option<String>,
+        player_order: Vec<String>,
     },
     StartRound {
-        active_player: String,
         hand: Vec<String>,
     },
     PlayersChoose {
-        active_player: String,
         description: String,
-        deadline: u64,
+        deadline: u128,
+        hand: Vec<String>,
     },
     BeginVoting {
         center_cards: Vec<String>,
-        deadline: u64,
+        deadline: u128,
+        description: String,
     },
     Results {
         player_to_vote: HashMap<String, String>,
+        player_to_current_card: HashMap<String, String>,
         active_card: String,
         point_change: HashMap<String, u16>,
     },
@@ -45,10 +48,11 @@ impl From<ServerMsg> for WsMessage {
 pub enum ClientMsg {
     JoinRoom { room_id: String, name: String },
     CreateRoom { name: String },
-    StartRound,
+    StartRound {},
     ActivePlayerChooseCard { card: String, description: String },
     PlayerChooseCard { card: String },
     Vote { card: String },
+    Ping {},
 }
 
 #[derive(Debug, Serialize, Clone, Copy)]
@@ -79,7 +83,14 @@ struct RoomState {
     current_description: String,
     player_to_current_card: HashMap<String, String>,
     player_to_vote: HashMap<String, String>,
-    answer_deadline: u64,
+    answer_deadline: u128,
+}
+
+fn get_time() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis()
 }
 
 // main object representing a game
@@ -105,7 +116,7 @@ impl Room {
             current_description: "".to_string(),
             player_to_current_card: HashMap::new(),
             player_to_vote: HashMap::new(),
-            answer_deadline: u64::MAX,
+            answer_deadline: u128::MAX,
         };
 
         let (tx, _) = broadcast::channel(10);
@@ -116,13 +127,72 @@ impl Room {
         }
     }
 
+    fn get_msg(
+        &self,
+        name: Option<&str>,
+        state: &RwLockWriteGuard<RoomState>,
+    ) -> Result<ServerMsg> {
+        return match state.stage {
+            RoomStage::ActiveChooses => Ok(ServerMsg::StartRound {
+                hand: state.player_hand.get(name.unwrap()).unwrap().clone(),
+            }),
+            RoomStage::PlayersChoose => Ok(ServerMsg::PlayersChoose {
+                description: state.current_description.clone(),
+                deadline: state.answer_deadline,
+                hand: state.player_hand.get(name.unwrap()).unwrap().clone(),
+            }),
+            RoomStage::Voting => {
+                let mut center_cards: Vec<String> = state
+                    .player_to_current_card
+                    .values()
+                    .map(|e| e.to_string())
+                    .collect();
+                center_cards.shuffle(&mut rand::thread_rng());
+
+                Ok(ServerMsg::BeginVoting {
+                    center_cards,
+                    deadline: state.answer_deadline,
+                    description: state.current_description.clone(),
+                })
+            }
+            RoomStage::Results => Ok(ServerMsg::Results {
+                player_to_vote: state.player_to_vote.clone(),
+                player_to_current_card: state.player_to_current_card.clone(),
+                active_card: state
+                    .player_to_current_card
+                    .get(&state.player_order[state.active_player])
+                    .unwrap()
+                    .to_string(),
+                point_change: self.compute_results(state),
+            }),
+            _ => Err(anyhow!("No msg to send")),
+        };
+    }
+
     pub async fn handle_client_msg(&self, name: &str, msg: WsMessage) -> Result<()> {
         let mut state = self.state.write().await;
         {
             // check if answer deadline has passed
-            if state.answer_deadline < tokio::time::Instant::now().elapsed().as_secs() {
+            if state.answer_deadline < get_time() {
                 if matches!(state.stage, RoomStage::PlayersChoose) {
                     state.stage = RoomStage::Voting;
+
+                    // choose random card for those who didn't choose by the deadline
+                    for player in state.player_order.clone().iter() {
+                        if !state.player_to_current_card.contains_key(player) {
+                            let mut rng = rand::thread_rng();
+                            let card = state
+                                .player_hand
+                                .get(player)
+                                .unwrap()
+                                .choose(&mut rng)
+                                .unwrap()
+                                .clone();
+                            state
+                                .player_to_current_card
+                                .insert(player.to_string(), card);
+                        }
+                    }
 
                     // remove cards from hand that were put in the center
                     for (player, card) in state.player_to_current_card.clone().iter() {
@@ -133,21 +203,45 @@ impl Room {
                         }
                     }
 
-                    state.answer_deadline = 45 + tokio::time::Instant::now().elapsed().as_secs();
-                    let mut center_cards: Vec<String> = state
+                    state.answer_deadline = 120e3 as u128 + get_time();
+                    self.broadcast_msg(self.get_msg(None, &state)?)?;
+                } else if matches!(state.stage, RoomStage::Voting) {
+                    state.stage = RoomStage::Results;
+
+                    let center_cards: Vec<String> = state
                         .player_to_current_card
                         .values()
                         .map(|e| e.to_string())
                         .collect();
-                    center_cards.shuffle(&mut rand::thread_rng());
 
-                    self.broadcast.send(ServerMsg::BeginVoting {
-                        center_cards,
-                        deadline: state.answer_deadline,
-                    })?;
-                } else if matches!(state.stage, RoomStage::Voting) {
-                    state.stage = RoomStage::Results;
-                    self.send_results(&mut state);
+                    // choose random card to vote for if the player didn't choose
+                    for player in state.player_order.clone().iter() {
+                        if !state.player_to_vote.contains_key(player) {
+                            // rand int 0 to 5
+                            let mut rng = rand::thread_rng();
+                            let mut card = center_cards.choose(&mut rng).unwrap().clone();
+
+                            // ensure player cannot choose their own card
+                            while &card == state.player_to_current_card.get(player).unwrap() {
+                                card = center_cards.choose(&mut rng).unwrap().clone();
+                            }
+
+                            state.player_to_vote.insert(player.to_string(), card);
+                        }
+                    }
+
+                    let point_change = self.compute_results(&mut state);
+
+                    // update with the point change
+                    state.players.iter_mut().for_each(|(player, info)| {
+                        if let Some(points) = point_change.get(player) {
+                            info.points += points;
+                        }
+                    });
+
+                    // send results to everyone
+                    self.broadcast_msg(self.get_msg(None, &state)?)?;
+                    self.broadcast_msg(self.room_state(&state))?;
                 }
             }
         }
@@ -158,8 +252,10 @@ impl Room {
         println!("Handling client message: {:?}", msg);
 
         match msg {
-            ClientMsg::StartRound => {
-                if matches!(state.stage, RoomStage::Joining) {
+            ClientMsg::StartRound {} => {
+                if matches!(state.stage, RoomStage::Joining)
+                    || matches!(state.stage, RoomStage::Results)
+                {
                     // finalize players
                     if state.player_order.len() == 0 {
                         // first round
@@ -194,22 +290,18 @@ impl Room {
                         }
                     }
 
+                    state.deck = deck;
+                    state.player_hand = player_hand;
+                    state.stage = RoomStage::ActiveChooses;
+
                     // notify players of the game start and their hands
-                    for (player, hand) in player_hand.iter() {
+                    for player in state.player_order.iter() {
                         if let Some(tx) = state.player_to_socket.get(player) {
-                            tx.send(ServerMsg::StartRound {
-                                hand: hand.clone(),
-                                active_player: state.player_order[state.active_player].clone(),
-                            })
-                            .await?;
+                            tx.send(self.get_msg(Some(&player), &state)?).await?;
                         }
                     }
 
-                    state.deck = deck;
-                    state.player_hand = player_hand;
-
-                    state.stage = RoomStage::ActiveChooses;
-                    self.broadcast.send(self.server_msg(&state))?;
+                    self.broadcast_msg(self.room_state(&state))?;
                 }
             }
             ClientMsg::ActivePlayerChooseCard { card, description } => {
@@ -226,19 +318,17 @@ impl Room {
                             return Err(anyhow!("Invalid description chosen by active player"));
                         }
                         state.current_description = description.to_string();
-
-                        state.answer_deadline =
-                            45 + tokio::time::Instant::now().elapsed().as_secs();
+                        state.answer_deadline = 20e3 as u128 + get_time();
+                        state.stage = RoomStage::PlayersChoose;
 
                         // notify players of the active player's choice
-                        self.broadcast.send(ServerMsg::PlayersChoose {
-                            active_player: name.to_string(),
-                            description: description.to_string(),
-                            deadline: state.answer_deadline,
-                        })?;
+                        for player in state.player_order.iter() {
+                            if let Some(tx) = state.player_to_socket.get(player) {
+                                tx.send(self.get_msg(Some(&player), &state)?).await?;
+                            }
+                        }
 
-                        state.stage = RoomStage::PlayersChoose;
-                        self.broadcast.send(self.server_msg(&state))?;
+                        self.broadcast_msg(self.room_state(&state))?;
                     }
                 }
             }
@@ -266,7 +356,21 @@ impl Room {
 
                     // verify that the card is in the center
                     if !state.player_to_current_card.values().any(|e| e == &card) {
-                        return Err(anyhow!("Invalid card voted for"));
+                        return Err(anyhow!("Invalid card"));
+                    }
+
+                    // verify that this player is not voting for their own code or send an error message
+                    if state.player_to_current_card.get(name).unwrap() == &card {
+                        state
+                            .player_to_socket
+                            .get(name)
+                            .unwrap()
+                            .send(
+                                ServerMsg::Error("You cannot vote for your own card".to_string())
+                                    .into(),
+                            )
+                            .await?;
+                        return Ok(());
                     }
 
                     // record vote
@@ -283,7 +387,7 @@ impl Room {
         Ok(())
     }
 
-    fn send_results(&self, state: &mut RwLockWriteGuard<RoomState>) {
+    fn compute_results(&self, state: &RwLockWriteGuard<RoomState>) -> HashMap<String, u16> {
         let mut point_change: HashMap<String, u16> = HashMap::new();
         let active_player = state.player_order[state.active_player].clone();
         let active_card = state
@@ -294,7 +398,7 @@ impl Room {
 
         let mut votes_for_card: HashMap<String, u16> = HashMap::new();
 
-        for (player, card) in state.player_to_vote.iter() {
+        for card in state.player_to_vote.values() {
             *votes_for_card.entry(card.to_string()).or_insert(0) += 1;
         }
 
@@ -318,24 +422,17 @@ impl Room {
             }
         }
 
-        for (player, points) in point_change.iter() {
-            if let Some(info) = state.players.get_mut(player) {
-                info.points += points;
-            }
-        }
-
-        let res = self.broadcast.send(ServerMsg::Results {
-            player_to_vote: state.player_to_vote.clone(),
-            active_card: active_card.to_string(),
-            point_change,
-        });
-        self.broadcast.send(self.server_msg(&state)).unwrap();
+        point_change
     }
 
     pub async fn on_connection(&self, socket: &mut WebSocket, name: &str) {
         // public funciton
+        if let Err(e) = self.attempt_join(socket, name).await {
+            println!("Error in attempt_join: {:?}", e);
+            return;
+        }
 
-        let res = self.handle_join(socket, name).await;
+        let res = self.run_ws_loop(socket, name).await;
         println!("Player {} has left", name);
 
         let mut state = self.state.write().await;
@@ -351,62 +448,80 @@ impl Room {
         state.player_to_socket.remove(name);
 
         if let Err(e) = res {
-            println!("{}", e);
+            println!("Error in handle_join: {:?}", e);
         }
 
-        if let Err(e) = self.broadcast.send(self.server_msg(&state)) {
+        if let Err(e) = self.broadcast_msg(self.room_state(&state)) {
             println!("Error sending broadcast: {}", e);
         }
     }
 
-    async fn handle_join(&self, socket: &mut WebSocket, name: &str) -> Result<()> {
-        println!("Handling join for {}", name);
-
-        let (tx, mut rx) = mpsc::channel(10);
-
-        {
-            let mut state = self.state.write().await;
-
-            if let Some(player) = state.players.get_mut(name) {
-                // player already exists in the game
-                // and not in joining anymore
-                // if in joining then player.active will be true
-
-                if !player.active {
-                    player.active = true;
-                } else {
-                    socket
-                        .send(ServerMsg::Error("Name already taken".to_string()).into())
-                        .await?;
-                    return Err(anyhow!("Name already taken"));
-                }
-            } else if matches!(state.stage, RoomStage::Joining) {
-                // still in joining and not yet joined
-                if state.players.len() < 8 {
-                    state.players.insert(
-                        name.to_string(),
-                        PlayerInfo {
-                            active: true,
-                            points: 0,
-                        },
-                    );
-                } else {
-                    socket
-                        .send(ServerMsg::Error("Too many players!".to_string()).into())
-                        .await?;
-                    return Err(anyhow!("Too many players!"));
-                }
-            } else {
-                socket
-                    .send(ServerMsg::Error("Game has already started".to_string()).into())
-                    .await?;
-                return Err(anyhow!("Game has already started"));
-            }
-
-            self.broadcast.send(self.server_msg(&state))?;
-            state.player_to_socket.insert(name.to_string(), tx);
+    async fn attempt_join(&self, socket: &mut WebSocket, name: &str) -> Result<()> {
+        if name.is_empty() {
+            socket
+                .send(ServerMsg::Error("Name cannot be empty".to_string()).into())
+                .await?;
+            return Err(anyhow!("Name cannot be empty"));
         }
 
+        println!("Handling join for {}", name);
+
+        let mut state = self.state.write().await;
+
+        if let Some(player) = state.players.get_mut(name) {
+            // player already exists in the game
+            // and not in joining anymore
+            // if in joining then player.active will be true
+
+            if !player.active {
+                player.active = true;
+            } else {
+                socket
+                    .send(ServerMsg::Error("Name already taken".to_string()).into())
+                    .await?;
+                return Err(anyhow!("Name already taken"));
+            }
+        } else if matches!(state.stage, RoomStage::Joining) {
+            // still in joining and not yet joined
+            if state.players.len() < 8 {
+                state.players.insert(
+                    name.to_string(),
+                    PlayerInfo {
+                        active: true,
+                        points: 0,
+                    },
+                );
+            } else {
+                socket
+                    .send(ServerMsg::Error("Too many players!".to_string()).into())
+                    .await?;
+                return Err(anyhow!("Too many players!"));
+            }
+        } else {
+            socket
+                .send(ServerMsg::Error("Game has already started".to_string()).into())
+                .await?;
+            return Err(anyhow!("Game has already started"));
+        }
+
+        self.broadcast_msg(self.room_state(&state).into())?; // will not receive this one yet
+        socket.send(self.room_state(&state).into()).await?;
+        if let Ok(msg) = self.get_msg(Some(name), &state) {
+            socket.send(msg.into()).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn run_ws_loop(&self, socket: &mut WebSocket, name: &str) -> Result<()> {
+        println!("Starting loop for {}", name);
+
+        let (tx, mut rx) = mpsc::channel(10);
+        self.state
+            .write()
+            .await
+            .player_to_socket
+            .insert(name.to_string(), tx);
         let mut broadcast_updates = self.broadcast.subscribe();
 
         loop {
@@ -423,11 +538,11 @@ impl Room {
                     }
                 },
                 msg = rx.recv() => {
-                    if let Some(msg) = msg {
-                        socket.send(msg.into()).await?;
-                    } else {
-                        // channel has been closed
-                        break;
+                    match msg {
+                        Some(msg) => {
+                            socket.send(msg.into()).await?;
+                        }
+                        _ => break,
                     }
                 }
             }
@@ -436,11 +551,20 @@ impl Room {
         Ok(())
     }
 
-    fn server_msg(&self, state: &RwLockWriteGuard<RoomState>) -> ServerMsg {
+    fn broadcast_msg(&self, msg: ServerMsg) -> Result<()> {
+        if self.broadcast.receiver_count() != 0 {
+            self.broadcast.send(msg)?;
+        }
+        Ok(())
+    }
+
+    fn room_state(&self, state: &RwLockWriteGuard<RoomState>) -> ServerMsg {
         ServerMsg::RoomState {
             room_id: state.room_id.clone(),
             players: state.players.clone(),
             stage: state.stage,
+            active_player: state.player_order.get(state.active_player).cloned(),
+            player_order: state.player_order.clone(),
         }
     }
 }

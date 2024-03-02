@@ -1,71 +1,39 @@
 <script lang="ts">
 	import { fade } from 'svelte/transition';
-	let name = '';
+	import { goto } from '$app/navigation';
+	import { onMount } from 'svelte';
+	import { nameStore } from '$lib/store';
+	import { get } from 'svelte/store';
+	import GameServer from '../gameServer';
+
+	let name = get(nameStore) || '';
 	let roomCode = '';
 	let joinGameClicked = false;
+	let gameServer: GameServer;
 
-	const host = 'localhost:8080';
+	$: nameStore.set(name);
 
-	function setupSocket(ws: WebSocket) {
-		ws.onopen = () => {
-			console.log('Connected to server');
-		};
+	onMount(() => {
+		gameServer = new GameServer();
 
-		ws.onmessage = (event) => {
-			let data = JSON.parse(event.data);
-			console.log('ServerMsg:', data);
-		};
-
-		ws.onclose = () => {
-			console.log('Disconnected from server');
-		};
-	}
+		gameServer.addMsgHandler((data: any) => {
+			if (data.RoomState) {
+				gameServer.close();
+				goto(`/game/${data.RoomState.room_id}`);
+			}
+			console.log(data);
+		});
+	});
 
 	function createGame() {
 		console.log('Creating game');
-		let ws = new WebSocket(`ws://${host}/ws`);
 
-		ws.onopen = () => {
-			ws.send(
-				JSON.stringify({
-					CreateRoom: {
-						name: name
-					}
-				})
-			);
-		};
-
-		ws.onmessage = (event) => {
-			let data = JSON.parse(event.data);
-			console.log('ServerMsg:', data);
-			if (data.RoomState) {
-				console.log('Created room');
-			}
-		};
+		gameServer.createRoom(name);
 	}
 
 	function joinGame() {
 		if (joinGameClicked) {
-			console.log('Joining game');
-			let ws = new WebSocket(`ws://${host}/ws`);
-			ws.onopen = () => {
-				ws.send(
-					JSON.stringify({
-						JoinRoom: {
-							name: name,
-							room_id: roomCode
-						}
-					})
-				);
-			};
-
-			ws.onmessage = (event) => {
-				let data = JSON.parse(event.data);
-				console.log('ServerMsg:', data);
-				if (data.RoomState) {
-					console.log('Joined room');
-				}
-			};
+			goto(`/game/${roomCode}`);
 		} else {
 			joinGameClicked = true;
 		}

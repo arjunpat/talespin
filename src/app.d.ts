@@ -7,3 +7,8 @@ declare namespace App {
 	// interface Error {}
 	// interface Platform {}
 }
+declare global {
+	interface Window {
+		gameServer: GameServer;
+	}
+}
