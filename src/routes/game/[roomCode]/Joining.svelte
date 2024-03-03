@@ -17,8 +17,8 @@
 </script>
 
 <div class="m-auto w-80/10">
-	<div class="max-w-96 mx-auto">
-		<h1 class="text-3xl text-center">Hi {name}, let's play Dixit!</h1>
+	<div class="max-w-md mx-auto">
+		<h1 class="text-3xl text-center">Hi {name}, let's play Talespin!</h1>
 		<h2 class="text-xl text-center">
 			You are in room
 			<code class=" code">{roomCode}</code>

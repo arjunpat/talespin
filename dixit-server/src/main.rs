@@ -1,9 +1,8 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use axum::{
     extract::{
-        self,
         ws::{Message as WsMessage, WebSocket},
-        State, WebSocketUpgrade,
+        Json, State, WebSocketUpgrade,
     },
     http::{header, Method},
     response::IntoResponse,
@@ -17,7 +16,7 @@ use tower_http::cors::{Any, CorsLayer};
 mod room;
 
 use rand::distributions::{Distribution, Uniform};
-use room::Room;
+use room::{Room, ServerMsg};
 
 // main object for server
 #[derive(Debug, Clone)]
@@ -43,12 +42,13 @@ impl ServerState {
         })
     }
 
-    async fn create_room(&self) -> Result<String> {
+    async fn create_room(&self) -> Result<ServerMsg> {
         let room_id = generate_room_id(4);
 
         let room = Room::new(&room_id, self.cards.clone());
+        let msg = room.get_room_state().await;
         self.rooms.insert(room_id.clone(), Arc::new(room));
-        Ok(room_id)
+        Ok(msg)
     }
 
     async fn join_room(&self, room_id: &str, socket: &mut WebSocket, name: &str) -> Result<()> {
@@ -86,7 +86,6 @@ async fn main() {
 
     let app = Router::new()
         .route("/ws", get(ws_handler))
-        .route("/", get(test_handler))
         .route("/create", post(create_room))
         .route("/exists", post(exists_handler))
         .layer(cors)
@@ -103,12 +102,11 @@ async fn main() {
 }
 
 async fn create_room(State(state): State<ServerState>) -> String {
-    let room_id = state.create_room().await;
+    let room = state.create_room().await;
     // json response with room id
 
-    if let Ok(room_id) = room_id {
-        let room = state.get_room(&room_id).unwrap();
-        serde_json::to_string(&room.get_room_state().await).unwrap()
+    if let Ok(room_state) = room {
+        serde_json::to_string(&room_state).unwrap()
     } else {
         serde_json::to_string(&room::ServerMsg::ErrorMsg(
             "Failed to create room".to_string(),
@@ -119,12 +117,12 @@ async fn create_room(State(state): State<ServerState>) -> String {
 
 async fn exists_handler(
     State(state): State<ServerState>,
-    extract::Json(room_id): extract::Json<String>,
-) -> String {
+    Json(room_id): Json<String>,
+) -> &'static str {
     if state.get_room(&room_id).is_some() {
-        "true".to_string()
+        "true"
     } else {
-        "false".to_string()
+        "false"
     }
 }
 
@@ -136,7 +134,7 @@ async fn handle_socket(mut socket: WebSocket, state: ServerState) {
     let res = initialize_socket(&mut socket, state).await;
 
     if let Err(e) = res {
-        println!("Error: {}", e);
+        println!("Error in initialize_socket: {}", e);
     }
 }
 
@@ -146,46 +144,14 @@ async fn initialize_socket(socket: &mut WebSocket, state: ServerState) -> Result
         .await
         .ok_or_else(|| anyhow!("Expected initial message from client"))??;
 
-    match msg {
-        WsMessage::Text(s) => {
-            let msg: room::ClientMsg = serde_json::from_str(&s)
-                .context(format!("Failed to deserialize client msg: {}", s))?;
-
-            match msg {
-                room::ClientMsg::JoinRoom { room_id, name } => {
-                    println!("Joining room: {} as {}", room_id, name);
-                    // TODO double check this code because the error might not always be failed to join room
-                    if let Err(e) = state.join_room(&room_id, socket, &name).await {
-                        println!("Error joining room: {}", e);
-                        socket
-                            .send(
-                                room::ServerMsg::ErrorMsg("Failed to join room".to_string()).into(),
-                            )
-                            .await?;
-                    }
-                }
-                // room::ClientMsg::CreateRoom { name } => {
-                //     println!("Creating room as {}", name);
-                //     let room_id = state.create_room().await?;
-                //     if let Err(e) = state.join_room(&room_id, socket, &name).await {
-                //         println!("Error after creating room: {}", e);
-                //     }
-                // }
-                _ => {
-                    return Err(anyhow!(
-                        "Expected JoinRoom or CreateRoom message from client"
-                    ));
-                }
+    if let WsMessage::Text(s) = msg {
+        if let Ok(msg) = serde_json::from_str(&s) {
+            if let room::ClientMsg::JoinRoom { room_id, name } = msg {
+                println!("Attmping: join {} as {}", room_id, name);
+                state.join_room(&room_id, socket, &name).await?
             }
         }
-        _ => {
-            return Err(anyhow!("Expected text message from client"));
-        }
-    };
+    }
 
     Ok(())
-}
-
-async fn test_handler() -> &'static str {
-    "Hello, World!"
 }

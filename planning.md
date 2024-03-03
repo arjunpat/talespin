@@ -1,2 +1,1 @@
--if everyone has voted, load next screen early
--get rid of unwraps
+-add "you have a new card!"

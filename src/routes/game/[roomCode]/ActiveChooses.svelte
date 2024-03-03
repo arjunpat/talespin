@@ -27,11 +27,9 @@
 
 <div class="flex justify-center">
 	<div>
-		<h1 class="text-2xl">{name}, your six cards:</h1>
-		<Images {displayImages} bind:selectedImage selectable={activePlayer === name} />
-		<div class="pt-5">
+		<div class="py-5">
 			{#if activePlayer === name}
-				<h1 class="text-xl">Choose a card and write a one-word description</h1>
+				<h1 class="text-2xl">Choose a card and write a one-word description</h1>
 				<input
 					type="text"
 					placeholder="Description"
@@ -51,9 +49,14 @@
 					>
 				</div>
 			{:else}
-				<h1 class="text-xl">Sit tight!</h1>
-				<p>Waiting for {activePlayer} to choose a card and description</p>
+				<h1 class="text-2xl">Sit tight!</h1>
+				<p>
+					Waiting for <span class="boujee-text">{activePlayer}</span> to choose a card and description
+				</p>
 			{/if}
 		</div>
+
+		<h1 class="text-xl">{name}, your six cards:</h1>
+		<Images {displayImages} bind:selectedImage selectable={activePlayer === name} />
 	</div>
 </div>

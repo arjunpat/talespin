@@ -9,7 +9,7 @@
 		{#each displayImages as image}
 			<div class="group" on:click={() => (selectedImage = image)}>
 				<img
-					class={`${selectedImage === image ? 'border-4 border-white' : ''} transition-all duration-150 ease-in-out group-hover:scale-110 group-hover:shadow-2xl group-focus:shadow-2xl rounded-lg cursor-pointer`}
+					class={`${selectedImage === image ? 'border-4 border-white shadow-xlg' : ''} transition-all duration-150 ease-in-out group-hover:scale-110 group-hover:shadow-2xl group-focus:shadow-2xl rounded-lg cursor-pointer`}
 					src="../../assets/cards/{image}"
 					alt="You can't play this game without the images!"
 				/>

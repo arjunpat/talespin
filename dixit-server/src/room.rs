@@ -254,6 +254,8 @@ impl Room {
             }
         });
 
+        self.clear_ready(state);
+
         // send results to everyone
         self.broadcast_msg(self.get_msg(None, &state)?)?;
         self.broadcast_msg(self.room_state(&state))?;
@@ -488,7 +490,7 @@ impl Room {
             for (player, _) in state.player_to_vote.iter() {
                 point_change.insert(player.to_string(), 2);
             }
-            point_change.insert(active_player, 0);
+            point_change.insert(active_player.clone(), 0);
         } else {
             for (player, card) in state.player_to_current_card.iter() {
                 if card == &active_card {
@@ -498,11 +500,13 @@ impl Room {
                 }
             }
 
-            point_change.insert(active_player, 3);
+            point_change.insert(active_player.clone(), 3);
         }
 
         for (player, card) in state.player_to_current_card.iter() {
-            *point_change.get_mut(player).unwrap() += votes_for_card.get(card).unwrap_or(&0);
+            if player != &active_player {
+                *point_change.get_mut(player).unwrap() += votes_for_card.get(card).unwrap_or(&0);
+            }
         }
 
         point_change
