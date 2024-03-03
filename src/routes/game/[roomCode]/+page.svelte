@@ -15,6 +15,7 @@
 	import PlayersChoose from './PlayersChoose.svelte';
 	import Voting from './Voting.svelte';
 	import Results from './Results.svelte';
+	import End from './End.svelte';
 
 	// connection information
 	let name = '';
@@ -114,6 +115,8 @@
 				});
 				console.log('hello');
 				goto('/');
+			} else if (data.EndGame) {
+				stage = 'End';
 			}
 		});
 	});
@@ -122,7 +125,7 @@
 <div class="pt-10 w-full">
 	<div class="flex flex-row justify-center">
 		<div>
-			{#if stage !== 'Joining'}
+			{#if stage !== 'Joining' && stage !== 'End'}
 				<div class="p-5">
 					<Leaderboard {players} {stage} {pointChange} {activePlayer} {roundNum} />
 				</div>
@@ -139,6 +142,8 @@
 				<Voting {displayImages} {activePlayer} {name} {gameServer} {description} />
 			{:else if stage === 'Results'}
 				<Results {displayImages} {gameServer} {playerToCurrentCard} {playerToVote} {activeCard} />
+			{:else if stage === 'End'}
+				<End {players} />
 			{/if}
 		</div>
 		<!-- {#if stage !== 'Joining'}

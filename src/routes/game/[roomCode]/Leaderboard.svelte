@@ -24,10 +24,7 @@
 				<div class="flex space-between w-44">
 					<div class="flex-auto">
 						{i + 1}.
-						<span
-							class={`${stage == 'ActiveChooses' && player === activePlayer ? 'boujee-text' : ''} `}
-							>{player}</span
-						>
+						<span class={`${player === activePlayer ? 'boujee-text' : ''} `}>{player}</span>
 						{#if !players[player].connected}
 							<span class="text-error-500">(afk)</span>
 						{/if}
@@ -49,6 +46,8 @@
 				</div>
 			{/each}
 		</div>
+		<br />
+		<p>First to 10 points!</p>
 	</div>
 </div>
 

@@ -1,8 +1,9 @@
-export const production = window.location.href.includes('talespin.live');
+import { browser } from "$app/environment";
+export const production = browser ? window.location.href.includes('talespin.live') : false;
 
-export const host = window.location.href.includes('talespin.live') ? 'api.talespin.live' : '127.0.0.1:8081';
-export const http_host = `https://${host}`;
-export const ws_host = `wss://${host}`;
+export const host = production ? 'api.talespin.live' : '127.0.0.1:8081';
+export const http_host = `${production ? 'https' : 'http'}://${host}`;
+export const ws_host = `${production ? 'wss' : 'ws'}://${host}`;
 export const ws_url = `${ws_host}/ws`;
 
 class GameServer {

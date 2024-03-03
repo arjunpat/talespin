@@ -2,7 +2,7 @@ use anyhow::{anyhow, Context, Result};
 use axum::{extract::ws::Message as WsMessage, extract::ws::WebSocket};
 use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 use tokio::sync::{broadcast, mpsc, RwLock, RwLockWriteGuard};
 
 #[derive(Debug, Serialize, Clone)]
@@ -34,6 +34,7 @@ pub enum ServerMsg {
     },
     ErrorMsg(String),
     InvalidRoomId {},
+    EndGame {},
 }
 
 impl From<ServerMsg> for WsMessage {
@@ -67,6 +68,8 @@ pub enum RoomStage {
     Voting,
     // results are computed; circle back to ActiveChooses while deck is not empty
     Results,
+    // game is over
+    End,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -115,14 +118,16 @@ pub struct Room {
     state: RwLock<RoomState>,
     // send updates to everyone in the room
     broadcast: broadcast::Sender<ServerMsg>,
+    // keep pointer to the base deck for refills
+    base_deck: Arc<Vec<String>>,
 }
 
 impl Room {
-    pub fn new(room_id: &str, deck: Vec<String>) -> Self {
+    pub fn new(room_id: &str, base_deck: Arc<Vec<String>>) -> Self {
         let state = RoomState {
             room_id: room_id.to_string(),
             players: HashMap::new(),
-            deck,
+            deck: base_deck.to_vec(),
             stage: RoomStage::Joining,
             player_order: Vec::new(),
             player_hand: HashMap::new(),
@@ -139,6 +144,7 @@ impl Room {
         Self {
             state: RwLock::new(state),
             broadcast: tx,
+            base_deck,
         }
     }
 
@@ -169,6 +175,7 @@ impl Room {
                     .to_string(),
                 point_change: self.compute_results(state),
             }),
+            RoomStage::End => Ok(ServerMsg::EndGame {}),
             _ => Err(anyhow!("No msg to send")),
         }
     }
@@ -282,6 +289,11 @@ impl Room {
             state.player_order.shuffle(&mut rand::thread_rng());
         } else {
             state.active_player = (state.active_player + 1) % state.player_order.len();
+
+            if state.deck.len() < state.player_order.len() {
+                // not enough cards, reload
+                state.deck = self.base_deck.to_vec();
+            }
         }
 
         // shuffle deck
@@ -346,8 +358,29 @@ impl Room {
 
                     self.broadcast_msg(self.room_state(&state))?;
 
+                    // if any player has 10 points, end game
+                    let max_points = state
+                        .players
+                        .values()
+                        .map(|p| p.points)
+                        .max()
+                        .unwrap_or_default();
+
+                    if max_points >= 3 {
+                        state.stage = RoomStage::End;
+                        self.broadcast_msg(self.get_msg(None, &state)?)?;
+                        return Ok(());
+                    }
+
+                    // otherwise, check if everyone is ready for next round
                     if state.players.values().filter(|p| p.ready).count() == state.players.len() {
-                        self.init_round(&mut state).await?;
+                        if state.players.len() >= 3 {
+                            self.init_round(&mut state).await?;
+                        } else {
+                            self.broadcast_msg(
+                                ServerMsg::ErrorMsg("Need at least 3 players".to_string()).into(),
+                            )?;
+                        }
                     }
                 }
             }
@@ -362,10 +395,10 @@ impl Room {
 
                     let description = description.trim();
                     // verify that the description is not empty and is one word
-                    if description.is_empty() || description.contains(' ') {
+                    if description.is_empty() {
                         if let Some(tx) = state.player_to_socket.get(name) {
                             tx.send(
-                                ServerMsg::ErrorMsg("Description must be one word".to_string())
+                                ServerMsg::ErrorMsg("Description must not be empty".to_string())
                                     .into(),
                             )
                             .await?;

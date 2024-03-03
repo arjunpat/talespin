@@ -59,7 +59,7 @@
 	<h1 class="h1">
 		<span
 			class="bg-gradient-to-br from-red-500 to-yellow-500 bg-clip-text text-transparent box-decoration-clone"
-			>Play Dixit!</span
+			>Play Talespin!</span
 		>
 	</h1>
 
@@ -90,5 +90,8 @@
 			<button on:click={() => createGame()} class="btn variant-filled">Create Game</button>
 			<button on:click={() => joinGame()} class="btn variant-filled">Join Game</button>
 		</div>
+	</div>
+	<div class="flex justify-center mt-4">
+		<a href="/how-to-play" class="link text-center underline">Instructions</a>
 	</div>
 </div>
