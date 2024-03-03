@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Accordion, AccordionItem, ProgressBar } from '@skeletonlabs/skeleton';
 	import { InfoIcon } from 'svelte-feather-icons';
+	import { getToastStore } from '@skeletonlabs/skeleton';
 
 	import GameServer from '$lib/gameServer';
 	import Images from './Images.svelte';
@@ -13,6 +14,16 @@
 	export let description = '';
 
 	let selectedImage = '';
+	let toastStore = getToastStore();
+
+	function vote() {
+		gameServer.vote(selectedImage);
+		toastStore.trigger({
+			message: '👌 Locked in!',
+			autohide: true,
+			timeout: 2500
+		});
+	}
 </script>
 
 <div class="flex justify-center">
@@ -71,12 +82,12 @@
 				<Images {displayImages} bind:selectedImage selectable={activePlayer !== name} />
 
 				<div class="flex justify-center">
-					<button
-						class="btn variant-filled mt-5"
-						disabled={selectedImage === ''}
-						on:click={() => gameServer.vote(selectedImage)}>Vote</button
+					<button class="btn variant-filled mt-5" disabled={selectedImage === ''} on:click={vote}
+						>Vote</button
 					>
 				</div>
+
+				<!-- TODO ADD TOAST -->
 
 				<h1 class="text-xl my-5 mt-20">How points work</h1>
 				<div class="card light mb-20">

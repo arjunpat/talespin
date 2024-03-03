@@ -11,7 +11,10 @@ use axum::{
 };
 use dashmap::DashMap;
 use std::{fs, net::SocketAddr, sync::Arc};
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::{
+    cors::{Any, CorsLayer},
+    trace::TraceLayer,
+};
 
 mod room;
 
@@ -43,7 +46,12 @@ impl ServerState {
     }
 
     async fn create_room(&self) -> Result<ServerMsg> {
-        let room_id = generate_room_id(4);
+        let mut room_id = generate_room_id(4);
+
+        // println!("create room: 0");
+        while (self.get_room(&room_id)).is_some() {
+            room_id = generate_room_id(4);
+        }
 
         let room = Room::new(&room_id, self.base_deck.clone());
         let msg = room.get_room_state().await;
@@ -52,13 +60,14 @@ impl ServerState {
     }
 
     async fn join_room(&self, room_id: &str, socket: &mut WebSocket, name: &str) -> Result<()> {
-        if let Some(room) = self.rooms.get(room_id) {
-            room.value().on_connection(socket, name).await;
+        // hold no reference to inside the dashmap to prevent deadlock
+        if let Some(room) = self.get_room(room_id) {
+            room.on_connection(socket, name).await;
         } else {
-            socket
-                .send(room::ServerMsg::InvalidRoomId {}.into())
-                .await?;
+            socket.send(ServerMsg::InvalidRoomId {}.into()).await?;
+            return Ok(());
         }
+
         Ok(())
     }
 
@@ -79,6 +88,10 @@ fn generate_room_id(length: usize) -> String {
 async fn main() {
     let state = ServerState::new().unwrap();
 
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .init();
+
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods([Method::GET, Method::POST])
@@ -88,6 +101,7 @@ async fn main() {
         .route("/ws", get(ws_handler))
         .route("/create", post(create_room))
         .route("/exists", post(exists_handler))
+        .layer(TraceLayer::new_for_http())
         .layer(cors)
         .with_state(state);
 
@@ -147,8 +161,15 @@ async fn initialize_socket(socket: &mut WebSocket, state: ServerState) -> Result
     if let WsMessage::Text(s) = msg {
         if let Ok(msg) = serde_json::from_str(&s) {
             if let room::ClientMsg::JoinRoom { room_id, name } = msg {
-                println!("Attmping: join {} as {}", room_id, name);
-                state.join_room(&room_id, socket, &name).await?
+                if name.len() > 30 {
+                    socket
+                        .send(room::ServerMsg::ErrorMsg("Name too long".to_string()).into())
+                        .await?;
+                    return Err(anyhow!("Name too long"));
+                }
+                state
+                    .join_room(&room_id.to_lowercase(), socket, &name)
+                    .await?
             }
         }
     }

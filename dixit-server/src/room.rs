@@ -274,6 +274,28 @@ impl Room {
         Ok(())
     }
 
+    fn check_deck(&self, state: &mut RwLockWriteGuard<'_, RoomState>) {
+        if state.deck.len() < state.player_order.len() {
+            let mut new_deck = self.base_deck.to_vec();
+
+            // get all cards currently in hands
+            let mut all_hands = Vec::new();
+            for player in state.player_hand.keys() {
+                all_hands.append(&mut state.player_hand[player].clone());
+            }
+
+            // remove cards from deck
+            for card in all_hands {
+                if let Some(pos) = new_deck.iter().position(|e| e == &card) {
+                    new_deck.remove(pos);
+                }
+            }
+
+            state.deck = new_deck;
+            state.deck.shuffle(&mut rand::thread_rng());
+        }
+    }
+
     async fn init_round(&self, state: &mut RwLockWriteGuard<'_, RoomState>) -> Result<()> {
         if state.players.len() < 3 {
             return Err(anyhow!("Not enough players"));
@@ -290,10 +312,8 @@ impl Room {
         } else {
             state.active_player = (state.active_player + 1) % state.player_order.len();
 
-            if state.deck.len() < state.player_order.len() {
-                // not enough cards, reload
-                state.deck = self.base_deck.to_vec();
-            }
+            // not enough cards, reload
+            self.check_deck(state);
         }
 
         // shuffle deck
@@ -366,7 +386,7 @@ impl Room {
                         .max()
                         .unwrap_or_default();
 
-                    if max_points >= 3 {
+                    if max_points >= 10 {
                         state.stage = RoomStage::End;
                         self.broadcast_msg(self.get_msg(None, &state)?)?;
                         return Ok(());
@@ -523,15 +543,29 @@ impl Room {
         }
 
         let votes_for_active_card = *votes_for_card.get(&active_card).unwrap_or(&0);
-        if votes_for_active_card == 0 || votes_for_active_card == state.player_to_vote.len() as u16
-        {
-            // everyone or no-one voted
+        if votes_for_active_card == 0 {
+            // nobody voted for active card
+            for (player, _) in state.player_to_vote.iter() {
+                point_change.insert(player.to_string(), 2);
+            }
+
+            for (player, card) in state.player_to_current_card.iter() {
+                if player != &active_player {
+                    *point_change.get_mut(player).unwrap() +=
+                        votes_for_card.get(card).unwrap_or(&0);
+                }
+            }
+
+            point_change.insert(active_player.clone(), 0);
+        } else if votes_for_active_card == (state.player_order.len() - 1) as u16 {
+            // everyone voted for active card
             for (player, _) in state.player_to_vote.iter() {
                 point_change.insert(player.to_string(), 2);
             }
             point_change.insert(active_player.clone(), 0);
         } else {
-            for (player, card) in state.player_to_current_card.iter() {
+            // someone voted for the active card
+            for (player, card) in state.player_to_vote.iter() {
                 if card == &active_card {
                     point_change.insert(player.to_string(), 3);
                 } else {
@@ -539,13 +573,14 @@ impl Room {
                 }
             }
 
-            point_change.insert(active_player.clone(), 3);
-        }
-
-        for (player, card) in state.player_to_current_card.iter() {
-            if player != &active_player {
-                *point_change.get_mut(player).unwrap() += votes_for_card.get(card).unwrap_or(&0);
+            for (player, card) in state.player_to_current_card.iter() {
+                if player != &active_player {
+                    *point_change.get_mut(player).unwrap() +=
+                        votes_for_card.get(card).unwrap_or(&0);
+                }
             }
+
+            point_change.insert(active_player.clone(), 3);
         }
 
         point_change
@@ -641,8 +676,6 @@ impl Room {
     }
 
     async fn run_ws_loop(&self, socket: &mut WebSocket, name: &str) -> Result<()> {
-        println!("Starting loop for {}", name);
-
         let (tx, mut rx) = mpsc::channel(10);
         self.state
             .write()
@@ -707,7 +740,6 @@ impl Room {
     }
 
     pub async fn get_room_state(&self) -> ServerMsg {
-        // TODO fix this shouldn't be a write
         let state = self.state.write().await;
         self.room_state(&state)
     }

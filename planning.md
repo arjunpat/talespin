@@ -4,10 +4,10 @@
 -basic server stats
 -fix spacing
 -show choosing for the active player
+Highlight new card
+
 
 marking:
--instructions page
 -readme file
 -SEO
--change name everywhere
 
