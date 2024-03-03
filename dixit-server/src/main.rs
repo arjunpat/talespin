@@ -1,14 +1,18 @@
 use anyhow::{anyhow, Context, Result};
 use axum::{
-    extract::ws::Message as WsMessage,
-    extract::State,
-    extract::{ws::WebSocket, WebSocketUpgrade},
+    extract::{
+        self,
+        ws::{Message as WsMessage, WebSocket},
+        State, WebSocketUpgrade,
+    },
+    http::{header, Method},
     response::IntoResponse,
-    routing::get,
+    routing::{get, post},
     Router,
 };
 use dashmap::DashMap;
 use std::{fs, net::SocketAddr, sync::Arc};
+use tower_http::cors::{Any, CorsLayer};
 
 mod room;
 
@@ -48,12 +52,18 @@ impl ServerState {
     }
 
     async fn join_room(&self, room_id: &str, socket: &mut WebSocket, name: &str) -> Result<()> {
-        let room = self
-            .rooms
-            .get(room_id)
-            .ok_or_else(|| anyhow!("Room not found"))?;
-        room.on_connection(socket, name).await;
+        if let Some(room) = self.rooms.get(room_id) {
+            room.value().on_connection(socket, name).await;
+        } else {
+            socket
+                .send(room::ServerMsg::InvalidRoomId {}.into())
+                .await?;
+        }
         Ok(())
+    }
+
+    fn get_room(&self, room_id: &str) -> Option<Arc<Room>> {
+        self.rooms.get(room_id).map(|r| r.value().clone())
     }
 }
 
@@ -69,14 +79,20 @@ fn generate_room_id(length: usize) -> String {
 async fn main() {
     let state = ServerState::new().unwrap();
 
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods([Method::GET, Method::POST])
+        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]);
+
     let app = Router::new()
         .route("/ws", get(ws_handler))
         .route("/", get(test_handler))
+        .route("/create", post(create_room))
+        .route("/exists", post(exists_handler))
+        .layer(cors)
         .with_state(state);
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:8080")
-        .await
-        .unwrap();
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();
     println!("Listening on {}", listener.local_addr().unwrap());
     axum::serve(
         listener,
@@ -84,6 +100,32 @@ async fn main() {
     )
     .await
     .unwrap();
+}
+
+async fn create_room(State(state): State<ServerState>) -> String {
+    let room_id = state.create_room().await;
+    // json response with room id
+
+    if let Ok(room_id) = room_id {
+        let room = state.get_room(&room_id).unwrap();
+        serde_json::to_string(&room.get_room_state().await).unwrap()
+    } else {
+        serde_json::to_string(&room::ServerMsg::ErrorMsg(
+            "Failed to create room".to_string(),
+        ))
+        .unwrap()
+    }
+}
+
+async fn exists_handler(
+    State(state): State<ServerState>,
+    extract::Json(room_id): extract::Json<String>,
+) -> String {
+    if state.get_room(&room_id).is_some() {
+        "true".to_string()
+    } else {
+        "false".to_string()
+    }
 }
 
 async fn ws_handler(ws: WebSocketUpgrade, State(state): State<ServerState>) -> impl IntoResponse {
@@ -116,17 +158,19 @@ async fn initialize_socket(socket: &mut WebSocket, state: ServerState) -> Result
                     if let Err(e) = state.join_room(&room_id, socket, &name).await {
                         println!("Error joining room: {}", e);
                         socket
-                            .send(room::ServerMsg::Error("Failed to join room".to_string()).into())
+                            .send(
+                                room::ServerMsg::ErrorMsg("Failed to join room".to_string()).into(),
+                            )
                             .await?;
                     }
                 }
-                room::ClientMsg::CreateRoom { name } => {
-                    println!("Creating room as {}", name);
-                    let room_id = state.create_room().await?;
-                    if let Err(e) = state.join_room(&room_id, socket, &name).await {
-                        println!("Error after creating room: {}", e);
-                    }
-                }
+                // room::ClientMsg::CreateRoom { name } => {
+                //     println!("Creating room as {}", name);
+                //     let room_id = state.create_room().await?;
+                //     if let Err(e) = state.join_room(&room_id, socket, &name).await {
+                //         println!("Error after creating room: {}", e);
+                //     }
+                // }
                 _ => {
                     return Err(anyhow!(
                         "Expected JoinRoom or CreateRoom message from client"

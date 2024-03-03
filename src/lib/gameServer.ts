@@ -1,20 +1,18 @@
-const host = '10.11.8.120:8080';
+// const host = '192.168.50.226:8080';
+export const host = '127.0.0.1:8080';
+export const http_host = `http://${host}`;
+export const ws_host = `ws://${host}`;
 import { nameStore } from "$lib/store";
 
 class GameServer {
     _ws: WebSocket;
     onmessage_handler: ((data: object) => void)[] = [];
     message_queue: string[] = [];
-    opened = false;
-    joined_room = '';
-    name = '';
+    onclosehandler = () => { };
 
     constructor() {
         this._ws = new WebSocket(`ws://${host}/ws`);
         this.setupSocket();
-        nameStore.subscribe(value => {
-            this.name = value;
-        })
     }
 
     setupSocket() {
@@ -29,10 +27,10 @@ class GameServer {
         };
         this._ws.onmessage = (event) => {
             let data = JSON.parse(event.data.toString());
-            if (data.RoomStatus) {
-                this.joined_room = data.RoomStatus.room_id;
-            }
-            this.opened = true;
+            // if (data.RoomStatus) {
+            //     this.joined_room = data.RoomStatus.room_id;
+            // }
+            // this.opened = true;
             this.onmessage_handler.forEach(handler => {
                 handler(data);
             });
@@ -40,16 +38,17 @@ class GameServer {
         this._ws.onclose = () => {
             console.log('disconnected');
             this._ws = new WebSocket(`ws://${host}/ws`);
-            if (this.joined_room !== '') {
-                this.message_queue.unshift(JSON.stringify({
-                    JoinRoom: {
-                        name: this.name,
-                        room_id: this.joined_room
-                    }
-                }))
-            }
+            // if (this.joined_room !== '') {
+            //     this.message_queue.unshift(JSON.stringify({
+            //         JoinRoom: {
+            //             name: this.name,
+            //             room_id: this.joined_room
+            //         }
+            //     }))
+            // }
 
             this.setupSocket();
+            this.onclosehandler();
         }
     }
 
@@ -80,9 +79,9 @@ class GameServer {
         });
     }
 
-    startRound() {
+    ready() {
         this.send({
-            StartRound: {}
+            Ready: {}
         });
     }
 
@@ -117,6 +116,10 @@ class GameServer {
 
     close() {
         this._ws.close();
+    }
+
+    onclose(func: () => void) {
+        this.onclosehandler = func;
     }
 }
 

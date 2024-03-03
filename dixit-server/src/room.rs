@@ -31,7 +31,8 @@ pub enum ServerMsg {
         active_card: String,
         point_change: HashMap<String, u16>,
     },
-    Error(String),
+    ErrorMsg(String),
+    InvalidRoomId {},
 }
 
 impl From<ServerMsg> for WsMessage {
@@ -44,9 +45,9 @@ impl From<ServerMsg> for WsMessage {
 
 #[derive(Debug, Deserialize)]
 pub enum ClientMsg {
+    Ready {},
     JoinRoom { room_id: String, name: String },
     CreateRoom { name: String },
-    StartRound {},
     ActivePlayerChooseCard { card: String, description: String },
     PlayerChooseCard { card: String },
     Vote { card: String },
@@ -55,32 +56,52 @@ pub enum ClientMsg {
 
 #[derive(Debug, Serialize, Clone, Copy)]
 pub enum RoomStage {
+    // waiting for players to join with room code
     Joining,
+    // active player chooses card from their hand and writes description
     ActiveChooses,
+    // players choose cards to match the description
     PlayersChoose,
+    // players vote on what they think the active card is
     Voting,
+    // results are computed; circle back to ActiveChooses while deck is not empty
     Results,
 }
 
 #[derive(Debug, Serialize, Clone)]
 pub struct PlayerInfo {
-    active: bool,
+    // player is connected to server
+    connected: bool,
+    // points in the game
     points: u16,
+    // ready is stage-specific
     ready: bool, // this is round dependent
 }
 
 #[derive(Debug)]
 struct RoomState {
     room_id: String,
+    // store general stats about each player
     players: HashMap<String, PlayerInfo>,
+    // store 6 cards in hand per player
     player_hand: HashMap<String, Vec<String>>,
+    // remaining deck; pop from this to players hands
     deck: Vec<String>,
+    // stage of the game
     stage: RoomStage,
+    // order of players being "active"
     player_order: Vec<String>,
+    active_player: usize, // index into player_order
+    // map to mpsc which sends messages to specific players
     player_to_socket: HashMap<String, mpsc::Sender<ServerMsg>>,
-    active_player: usize,
+
+    /** Round-specific information */
+    // chosen description by active player
     current_description: String,
+    // for the active player, this is the active card; for other players, this is the card they chose
     player_to_current_card: HashMap<String, String>,
+    // for each player, the card they voted for as being the active's card
+    // they cannot vote for themselves
     player_to_vote: HashMap<String, String>,
 }
 
@@ -122,13 +143,13 @@ impl Room {
         name: Option<&str>,
         state: &RwLockWriteGuard<RoomState>,
     ) -> Result<ServerMsg> {
-        return match state.stage {
+        match state.stage {
             RoomStage::ActiveChooses => Ok(ServerMsg::StartRound {
-                hand: state.player_hand.get(name.unwrap()).unwrap().clone(),
+                hand: state.player_hand[name.ok_or_else(|| anyhow!("No name provided"))?].clone(),
             }),
             RoomStage::PlayersChoose => Ok(ServerMsg::PlayersChoose {
                 description: state.current_description.clone(),
-                hand: state.player_hand.get(name.unwrap()).unwrap().clone(),
+                hand: state.player_hand[name.ok_or_else(|| anyhow!("No name provided"))?].clone(),
             }),
             RoomStage::Voting => Ok(ServerMsg::BeginVoting {
                 center_cards: self.get_center_cards(state),
@@ -139,13 +160,13 @@ impl Room {
                 player_to_current_card: state.player_to_current_card.clone(),
                 active_card: state
                     .player_to_current_card
-                    .get(&state.player_order[state.active_player])
+                    .get(&self.get_active_player(state)?)
                     .unwrap()
                     .to_string(),
                 point_change: self.compute_results(state),
             }),
             _ => Err(anyhow!("No msg to send")),
-        };
+        }
     }
 
     fn get_center_cards(&self, state: &RwLockWriteGuard<RoomState>) -> Vec<String> {
@@ -158,6 +179,18 @@ impl Room {
         center_cards
     }
 
+    fn get_active_player(&self, state: &RwLockWriteGuard<RoomState>) -> Result<String> {
+        if matches!(state.stage, RoomStage::Joining) {
+            return Err(anyhow!("Failed to find active player"));
+        }
+
+        Ok(state
+            .player_order
+            .get(state.active_player)
+            .unwrap() // unreachable
+            .to_string())
+    }
+
     fn init_voting(&self, state: &mut RwLockWriteGuard<RoomState>) -> Result<()> {
         state.stage = RoomStage::Voting;
 
@@ -165,13 +198,7 @@ impl Room {
         for player in state.player_order.clone().iter() {
             if !state.player_to_current_card.contains_key(player) {
                 let mut rng = rand::thread_rng();
-                let card = state
-                    .player_hand
-                    .get(player)
-                    .unwrap()
-                    .choose(&mut rng)
-                    .unwrap()
-                    .clone();
+                let card = state.player_hand[player].choose(&mut rng).unwrap().clone();
                 state
                     .player_to_current_card
                     .insert(player.to_string(), card);
@@ -205,7 +232,7 @@ impl Room {
             if player != &state.player_order[state.active_player]
                 && !state.player_to_vote.contains_key(player)
             {
-                // rand int 0 to 5
+                // choose random card
                 let mut rng = rand::thread_rng();
                 let mut card = center_cards.choose(&mut rng).unwrap().clone();
 
@@ -234,6 +261,62 @@ impl Room {
         Ok(())
     }
 
+    async fn init_round(&self, state: &mut RwLockWriteGuard<'_, RoomState>) -> Result<()> {
+        if state.players.len() < 3 {
+            return Err(anyhow!("Not enough players"));
+        }
+
+        // finalize players
+        if state.player_order.len() == 0 {
+            // first round
+            state.active_player = 0;
+            state.player_order = state.players.keys().cloned().collect::<Vec<_>>();
+            state.player_order.shuffle(&mut rand::thread_rng());
+        } else {
+            state.active_player = (state.active_player + 1) % state.player_order.len();
+        }
+
+        // shuffle deck
+        state.deck.shuffle(&mut rand::thread_rng());
+
+        // clear current chosen cards
+        state.player_to_current_card.clear();
+        state.player_to_vote.clear();
+
+        // ensure all players have 6 cards
+        let mut player_hand = state.player_hand.clone();
+
+        let mut deck = state.deck.clone();
+        for player in state.players.keys() {
+            if !player_hand.contains_key(player) {
+                player_hand.insert(player.clone(), Vec::new());
+            }
+
+            while player_hand.get(player).unwrap().len() < 6 {
+                player_hand.get_mut(player).unwrap().push(
+                    deck.pop()
+                        .ok_or_else(|| anyhow!("Not enough cards in the deck"))?,
+                );
+            }
+        }
+
+        state.deck = deck;
+        state.player_hand = player_hand;
+        state.stage = RoomStage::ActiveChooses;
+
+        // notify players of the game start and their hands
+        for player in state.player_order.iter() {
+            let _ = self
+                .send_msg(&state, &player, self.get_msg(Some(&player), &state)?)
+                .await;
+        }
+
+        self.clear_ready(state);
+        self.broadcast_msg(self.room_state(&state))?;
+
+        Ok(())
+    }
+
     pub async fn handle_client_msg(&self, name: &str, msg: WsMessage) -> Result<()> {
         let mut state = self.state.write().await;
 
@@ -243,57 +326,21 @@ impl Room {
         println!("Handling client message: {:?}", msg);
 
         match msg {
-            ClientMsg::StartRound {} => {
+            ClientMsg::Ready {} => {
                 if matches!(state.stage, RoomStage::Joining)
                     || matches!(state.stage, RoomStage::Results)
                 {
-                    // finalize players
-                    if state.player_order.len() == 0 {
-                        // first round
-                        state.active_player = 0;
-                        state.player_order = state.players.keys().cloned().collect::<Vec<_>>();
-                        state.player_order.shuffle(&mut rand::thread_rng());
-                    } else {
-                        state.active_player = (state.active_player + 1) % state.player_order.len();
-                    }
+                    state
+                        .players
+                        .get_mut(name)
+                        .ok_or_else(|| anyhow!("Unreachable: cannot ready player {}", name))?
+                        .ready = true;
 
-                    // shuffle deck
-                    state.deck.shuffle(&mut rand::thread_rng());
-
-                    // clear current chosen cards
-                    state.player_to_current_card.clear();
-                    state.player_to_vote.clear();
-
-                    // ensure all players have 6 cards
-                    let mut player_hand = state.player_hand.clone();
-
-                    let mut deck = state.deck.clone();
-                    for player in state.players.keys() {
-                        if !player_hand.contains_key(player) {
-                            player_hand.insert(player.clone(), Vec::new());
-                        }
-
-                        while player_hand.get(player).unwrap().len() < 6 {
-                            player_hand.get_mut(player).unwrap().push(
-                                deck.pop()
-                                    .ok_or_else(|| anyhow!("Not enough cards in the deck"))?,
-                            );
-                        }
-                    }
-
-                    state.deck = deck;
-                    state.player_hand = player_hand;
-                    state.stage = RoomStage::ActiveChooses;
-
-                    // notify players of the game start and their hands
-                    for player in state.player_order.iter() {
-                        let _ = self
-                            .send_msg(&state, &player, self.get_msg(Some(&player), &state)?)
-                            .await;
-                    }
-
-                    self.clear_ready(&mut state);
                     self.broadcast_msg(self.room_state(&state))?;
+
+                    if state.players.values().filter(|p| p.ready).count() == state.players.len() {
+                        self.init_round(&mut state).await?;
+                    }
                 }
             }
             ClientMsg::ActivePlayerChooseCard { card, description } => {
@@ -310,7 +357,7 @@ impl Room {
                     if description.is_empty() || description.contains(' ') {
                         if let Some(tx) = state.player_to_socket.get(name) {
                             tx.send(
-                                ServerMsg::Error("Description cannot contain spaces!".to_string())
+                                ServerMsg::ErrorMsg("Description must be one word".to_string())
                                     .into(),
                             )
                             .await?;
@@ -386,8 +433,10 @@ impl Room {
                             .get(name)
                             .unwrap()
                             .send(
-                                ServerMsg::Error("You cannot vote for your own card".to_string())
-                                    .into(),
+                                ServerMsg::ErrorMsg(
+                                    "You cannot vote for your own card".to_string(),
+                                )
+                                .into(),
                             )
                             .await?;
                         return Ok(());
@@ -428,7 +477,7 @@ impl Room {
 
         let mut votes_for_card: HashMap<String, u16> = HashMap::new();
 
-        for card in state.player_to_vote.values() {
+        for (_, card) in state.player_to_vote.iter() {
             *votes_for_card.entry(card.to_string()).or_insert(0) += 1;
         }
 
@@ -447,9 +496,13 @@ impl Room {
                 } else {
                     point_change.insert(player.to_string(), 0);
                 }
-
-                *point_change.get_mut(player).unwrap() += votes_for_card.get(card).unwrap_or(&0);
             }
+
+            point_change.insert(active_player, 3);
+        }
+
+        for (player, card) in state.player_to_current_card.iter() {
+            *point_change.get_mut(player).unwrap() += votes_for_card.get(card).unwrap_or(&0);
         }
 
         point_change
@@ -471,7 +524,7 @@ impl Room {
             state.players.remove(name);
         } else {
             if let Some(player) = state.players.get_mut(name) {
-                player.active = false;
+                player.connected = false;
             }
         }
 
@@ -489,7 +542,7 @@ impl Room {
     async fn attempt_join(&self, socket: &mut WebSocket, name: &str) -> Result<()> {
         if name.is_empty() {
             socket
-                .send(ServerMsg::Error("Name cannot be empty".to_string()).into())
+                .send(ServerMsg::ErrorMsg("Name cannot be empty".to_string()).into())
                 .await?;
             return Err(anyhow!("Name cannot be empty"));
         }
@@ -503,11 +556,11 @@ impl Room {
             // and not in joining anymore
             // if in joining then player.active will be true
 
-            if !player.active {
-                player.active = true;
+            if !player.connected {
+                player.connected = true;
             } else {
                 socket
-                    .send(ServerMsg::Error("Name already taken".to_string()).into())
+                    .send(ServerMsg::ErrorMsg("Name already taken".to_string()).into())
                     .await?;
                 return Err(anyhow!("Name already taken"));
             }
@@ -517,20 +570,20 @@ impl Room {
                 state.players.insert(
                     name.to_string(),
                     PlayerInfo {
-                        active: true,
+                        connected: true,
                         points: 0,
                         ready: false,
                     },
                 );
             } else {
                 socket
-                    .send(ServerMsg::Error("Too many players!".to_string()).into())
+                    .send(ServerMsg::ErrorMsg("Too many players!".to_string()).into())
                     .await?;
                 return Err(anyhow!("Too many players!"));
             }
         } else {
             socket
-                .send(ServerMsg::Error("Game has already started".to_string()).into())
+                .send(ServerMsg::ErrorMsg("Game has already started".to_string()).into())
                 .await?;
             return Err(anyhow!("Game has already started"));
         }
@@ -608,6 +661,12 @@ impl Room {
         for (_, player) in state.players.iter_mut() {
             player.ready = false;
         }
+    }
+
+    pub async fn get_room_state(&self) -> ServerMsg {
+        // TODO fix this shouldn't be a write
+        let state = self.state.write().await;
+        self.room_state(&state)
     }
 
     fn room_state(&self, state: &RwLockWriteGuard<RoomState>) -> ServerMsg {

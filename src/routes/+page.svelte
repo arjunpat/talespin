@@ -1,39 +1,54 @@
 <script lang="ts">
 	import { fade } from 'svelte/transition';
 	import { goto } from '$app/navigation';
-	import { onMount } from 'svelte';
+	import { getToastStore } from '@skeletonlabs/skeleton';
+
 	import { nameStore } from '$lib/store';
 	import { get } from 'svelte/store';
-	import GameServer from '../gameServer';
+	import { http_host } from '$lib/gameServer';
 
 	let name = get(nameStore) || '';
 	let roomCode = '';
 	let joinGameClicked = false;
-	let gameServer: GameServer;
+	let toastStore = getToastStore();
 
 	$: nameStore.set(name);
 
-	onMount(() => {
-		gameServer = new GameServer();
+	async function createGame() {
+		if (roomCode !== '') {
+			return joinGame();
+		}
 
-		gameServer.addMsgHandler((data: any) => {
-			if (data.RoomState) {
-				gameServer.close();
-				goto(`/game/${data.RoomState.room_id}`);
-			}
-			console.log(data);
+		let res = await fetch(`${http_host}/create`, {
+			method: 'POST'
 		});
-	});
+		res = await res.json();
 
-	function createGame() {
-		console.log('Creating game');
-
-		gameServer.createRoom(name);
+		if ((<any>res).RoomState) {
+			goto(`/game/${(<any>res).RoomState.room_id}`);
+		}
 	}
 
-	function joinGame() {
+	async function joinGame() {
 		if (joinGameClicked) {
-			goto(`/game/${roomCode}`);
+			let res = await fetch(`${http_host}/exists`, {
+				method: 'POST',
+				body: JSON.stringify(roomCode),
+				headers: {
+					'Content-Type': 'application/json'
+				}
+			});
+			res = await res.json();
+
+			if (res) {
+				goto(`/game/${roomCode}`);
+			} else {
+				toastStore.trigger({
+					message: '😭 Room does not exist',
+					autohide: true,
+					timeout: 2500
+				});
+			}
 		} else {
 			joinGameClicked = true;
 		}
