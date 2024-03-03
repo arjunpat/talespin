@@ -6,6 +6,7 @@
 	export let stage = '';
 	export let activePlayer = '';
 	export let pointChange: { [key: string]: number } = {};
+	export let roundNum: number;
 	let sortedPlayersList: string[] = [];
 
 	$: {
@@ -17,10 +18,10 @@
 
 <div class="flex w-80/10 justify-center">
 	<div class="card light p-4">
-		<h2 class="text-xl">Points</h2>
+		<h2 class="text-xl">Round {roundNum}</h2>
 		<div>
 			{#each sortedPlayersList as player, i}
-				<div class="flex space-between w-52">
+				<div class="flex space-between w-44">
 					<div class="flex-auto">
 						{i + 1}.
 						<span

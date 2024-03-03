@@ -1,8 +1,9 @@
-// const host = '192.168.50.226:8080';
-export const host = '127.0.0.1:8080';
-export const http_host = `http://${host}`;
-export const ws_host = `ws://${host}`;
-import { nameStore } from "$lib/store";
+export const production = window.location.href.includes('talespin.live');
+
+export const host = window.location.href.includes('talespin.live') ? 'api.talespin.live' : '127.0.0.1:8081';
+export const http_host = `https://${host}`;
+export const ws_host = `wss://${host}`;
+export const ws_url = `${ws_host}/ws`;
 
 class GameServer {
     _ws: WebSocket;
@@ -11,7 +12,7 @@ class GameServer {
     onclosehandler = () => { };
 
     constructor() {
-        this._ws = new WebSocket(`ws://${host}/ws`);
+        this._ws = new WebSocket(ws_url);
         this.setupSocket();
     }
 
@@ -27,25 +28,14 @@ class GameServer {
         };
         this._ws.onmessage = (event) => {
             let data = JSON.parse(event.data.toString());
-            // if (data.RoomStatus) {
-            //     this.joined_room = data.RoomStatus.room_id;
-            // }
-            // this.opened = true;
             this.onmessage_handler.forEach(handler => {
                 handler(data);
             });
         };
         this._ws.onclose = () => {
             console.log('disconnected');
-            this._ws = new WebSocket(`ws://${host}/ws`);
-            // if (this.joined_room !== '') {
-            //     this.message_queue.unshift(JSON.stringify({
-            //         JoinRoom: {
-            //             name: this.name,
-            //             room_id: this.joined_room
-            //         }
-            //     }))
-            // }
+            this._ws = new WebSocket(ws_url);
+
 
             this.setupSocket();
             this.onclosehandler();

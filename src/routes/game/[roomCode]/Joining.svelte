@@ -21,7 +21,7 @@
 		<h1 class="text-3xl text-center">Hi {name}, let's play Talespin!</h1>
 		<h2 class="text-xl text-center">
 			You are in room
-			<code class=" code">{roomCode}</code>
+			<code class="code text-lg">{roomCode}</code>
 		</h2>
 		<div class="container flex flex-wrap justify-center gap-4 mt-10">
 			{#each Object.entries(players) as [key, value]}

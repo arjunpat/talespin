@@ -4,9 +4,9 @@
 
 	export let displayImages: string[] = [];
 	export let activeCard = '';
-	export let activePlayer = '';
-	export let name = '';
-	export let description = '';
+	// export let activePlayer = '';
+	// export let name = '';
+	// export let description = '';
 	export let gameServer: GameServer;
 	export let playerToCurrentCard: { [key: string]: string } = {};
 	export let playerToVote: { [key: string]: string } = {};
@@ -64,7 +64,7 @@
 	</div>
 </div>
 
-<button class="btn variant-filled mt-5" on:click={() => gameServer.ready()}>Ready</button>
+<button class="btn variant-filled mt-5" on:click={() => gameServer.ready()}>Next Round</button>
 
 <style>
 	@property --bg-angle {

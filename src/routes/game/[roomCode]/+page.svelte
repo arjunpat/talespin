@@ -27,6 +27,7 @@
 	let stage: string = 'Joining';
 	let activePlayer = '';
 	let description = '';
+	let roundNum = 0;
 
 	// UI state
 	let displayImages: string[] = [];
@@ -70,6 +71,7 @@
 				players = data.RoomState.players;
 				stage = data.RoomState.stage;
 				activePlayer = data.RoomState.active_player || '';
+				roundNum = data.RoomState.round;
 				if (!rejoin) {
 					toastStore.trigger({
 						message: '👋 Connected to room!',
@@ -122,7 +124,7 @@
 		<div>
 			{#if stage !== 'Joining'}
 				<div class="p-5">
-					<Leaderboard {players} {stage} {pointChange} {activePlayer} />
+					<Leaderboard {players} {stage} {pointChange} {activePlayer} {roundNum} />
 				</div>
 			{/if}
 		</div>
@@ -136,16 +138,7 @@
 			{:else if stage === 'Voting'}
 				<Voting {displayImages} {activePlayer} {name} {gameServer} {description} />
 			{:else if stage === 'Results'}
-				<Results
-					{displayImages}
-					{activePlayer}
-					{name}
-					{gameServer}
-					{description}
-					{playerToCurrentCard}
-					{playerToVote}
-					{activeCard}
-				/>
+				<Results {displayImages} {gameServer} {playerToCurrentCard} {playerToVote} {activeCard} />
 			{/if}
 		</div>
 		<!-- {#if stage !== 'Joining'}

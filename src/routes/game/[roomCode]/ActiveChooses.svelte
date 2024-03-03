@@ -30,6 +30,19 @@
 		<div class="py-5">
 			{#if activePlayer === name}
 				<h1 class="text-2xl">Choose a card and write a one-word description</h1>
+			{:else}
+				<h1 class="text-3xl">Sit tight!</h1>
+				<p>
+					Waiting for <span class="boujee-text">{activePlayer}</span> to choose a card and description
+				</p>
+			{/if}
+		</div>
+
+		<h1 class="text-xl">{name}, your six cards:</h1>
+		<Images {displayImages} bind:selectedImage selectable={activePlayer === name} />
+
+		{#if activePlayer === name}
+			<div class="mt-5">
 				<input
 					type="text"
 					placeholder="Description"
@@ -40,7 +53,6 @@
 				{#if descriptionBox.includes(' ')}
 					<p class="text-red-500">Description must be one word</p>
 				{/if}
-
 				<div class="flex justify-center">
 					<button
 						class="btn variant-filled"
@@ -48,15 +60,7 @@
 						on:click={activePlayerChoose}>Choose</button
 					>
 				</div>
-			{:else}
-				<h1 class="text-2xl">Sit tight!</h1>
-				<p>
-					Waiting for <span class="boujee-text">{activePlayer}</span> to choose a card and description
-				</p>
-			{/if}
-		</div>
-
-		<h1 class="text-xl">{name}, your six cards:</h1>
-		<Images {displayImages} bind:selectedImage selectable={activePlayer === name} />
+			</div>
+		{/if}
 	</div>
 </div>

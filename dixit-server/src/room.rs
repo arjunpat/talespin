@@ -13,6 +13,7 @@ pub enum ServerMsg {
         stage: RoomStage,
         active_player: Option<String>,
         player_order: Vec<String>,
+        round: u16,
     },
     StartRound {
         hand: Vec<String>,
@@ -89,6 +90,8 @@ struct RoomState {
     deck: Vec<String>,
     // stage of the game
     stage: RoomStage,
+    // round number
+    round: u16,
     // order of players being "active"
     player_order: Vec<String>,
     active_player: usize, // index into player_order
@@ -128,6 +131,7 @@ impl Room {
             current_description: "".to_string(),
             player_to_current_card: HashMap::new(),
             player_to_vote: HashMap::new(),
+            round: 0,
         };
 
         let (tx, _) = broadcast::channel(10);
@@ -268,8 +272,10 @@ impl Room {
             return Err(anyhow!("Not enough players"));
         }
 
+        state.round += 1;
+
         // finalize players
-        if state.player_order.len() == 0 {
+        if state.round == 1 {
             // first round
             state.active_player = 0;
             state.player_order = state.players.keys().cloned().collect::<Vec<_>>();
@@ -680,6 +686,7 @@ impl Room {
             stage: state.stage,
             active_player: state.player_order.get(state.active_player).cloned(),
             player_order: state.player_order.clone(),
+            round: state.round,
         }
     }
 }

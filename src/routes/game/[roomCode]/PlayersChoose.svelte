@@ -34,21 +34,24 @@
 	<div>
 		<div class="py-5">
 			{#if activePlayer === name}
-				<h1 class="text-2xl">Sit tight!</h1>
+				<h1 class="text-3xl">Sit tight!</h1>
 				<p>Players are choosing cards that match "{description}"</p>
 			{:else}
 				<h1 class="text-2xl">Your turn!</h1>
 				<p>
 					Choose a card that <span class="boujee-text">{activePlayer}</span> would put for "{description}"
 				</p>
-				<div class="flex justify-center mt-5">
-					<button class="btn variant-filled" disabled={selectedImage === ''} on:click={choose}
-						>Choose</button
-					>
-				</div>
 			{/if}
 		</div>
 		<h1 class="text-xl">Your hand:</h1>
 		<Images {displayImages} bind:selectedImage selectable={activePlayer !== name} />
+
+		{#if activePlayer !== name}
+			<div class="flex justify-center mt-5">
+				<button class="btn variant-filled" disabled={selectedImage === ''} on:click={choose}
+					>Choose</button
+				>
+			</div>
+		{/if}
 	</div>
 </div>

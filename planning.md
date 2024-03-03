@@ -1,1 +1,2 @@
 -add "you have a new card!"
+-fix memory leak
