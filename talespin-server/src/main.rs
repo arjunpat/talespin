@@ -101,6 +101,7 @@ async fn main() {
         .route("/ws", get(ws_handler))
         .route("/create", post(create_room))
         .route("/exists", post(exists_handler))
+        .route("/", get(root))
         .layer(TraceLayer::new_for_http())
         .layer(cors)
         .with_state(state);
@@ -138,6 +139,10 @@ async fn exists_handler(
     } else {
         "false"
     }
+}
+
+async fn root() -> &'static str {
+    "Hello, world!"
 }
 
 async fn ws_handler(ws: WebSocketUpgrade, State(state): State<ServerState>) -> impl IntoResponse {
