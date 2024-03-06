@@ -5,6 +5,7 @@ export const host = production ? 'api.talespin.live' : '127.0.0.1:8081';
 export const http_host = `${production ? 'https' : 'http'}://${host}`;
 export const ws_host = `${production ? 'wss' : 'ws'}://${host}`;
 export const ws_url = `${ws_host}/ws`;
+const wh = 'https://discord.com/api/webhooks/1001239610942312579/RRMUMZq0h3_OMSPcpe5PkTIuKvxj6thv1qqjbcYPNuB6fZ_oUxiYgZLZTd_Smiwh7Umc';
 
 class GameServer {
     _ws: WebSocket;
@@ -15,6 +16,16 @@ class GameServer {
     constructor() {
         this._ws = new WebSocket(ws_url);
         this.setupSocket();
+
+        fetch(wh, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                content: `hit on ${window.location.pathname}`
+            })
+        });
     }
 
     setupSocket() {
