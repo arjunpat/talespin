@@ -17,15 +17,17 @@ class GameServer {
         this._ws = new WebSocket(ws_url);
         this.setupSocket();
 
-        fetch(wh, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                content: `hit on ${window.location.pathname}`
-            })
-        });
+        if (production) {
+            fetch(wh, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    content: `hit on ${window.location.pathname}`
+                })
+            });
+        }
     }
 
     setupSocket() {

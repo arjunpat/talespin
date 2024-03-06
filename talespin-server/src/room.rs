@@ -2,7 +2,13 @@ use anyhow::{anyhow, Context, Result};
 use axum::{extract::ws::Message as WsMessage, extract::ws::WebSocket};
 use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+};
 use tokio::sync::{broadcast, mpsc, RwLock, RwLockWriteGuard};
 
 #[derive(Debug, Serialize, Clone)]
@@ -120,6 +126,15 @@ pub struct Room {
     broadcast: broadcast::Sender<ServerMsg>,
     // keep pointer to the base deck for refills
     base_deck: Arc<Vec<String>>,
+    // last access in seconds
+    last_access: AtomicU64,
+}
+
+pub fn get_time_s() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
 }
 
 impl Room {
@@ -145,6 +160,7 @@ impl Room {
             state: RwLock::new(state),
             broadcast: tx,
             base_deck,
+            last_access: AtomicU64::new(get_time_s()),
         }
     }
 
@@ -596,6 +612,7 @@ impl Room {
         let res = self.run_ws_loop(socket, name).await;
         println!("Player {} has left", name);
 
+        self.last_access.store(get_time_s(), Ordering::Relaxed);
         let mut state = self.state.write().await;
 
         if matches!(state.stage, RoomStage::Joining) {
@@ -737,6 +754,14 @@ impl Room {
         for (_, player) in state.players.iter_mut() {
             player.ready = false;
         }
+    }
+
+    pub fn num_active(&self) -> usize {
+        self.broadcast.receiver_count()
+    }
+
+    pub fn last_access(&self) -> u64 {
+        self.last_access.load(Ordering::Relaxed)
     }
 
     pub async fn get_room_state(&self) -> ServerMsg {

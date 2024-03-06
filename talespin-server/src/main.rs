@@ -10,7 +10,7 @@ use axum::{
     Router,
 };
 use dashmap::DashMap;
-use std::{fs, net::SocketAddr, sync::Arc};
+use std::{collections::HashMap, fs, net::SocketAddr, sync::Arc};
 use tower_http::{
     cors::{Any, CorsLayer},
     trace::TraceLayer,
@@ -19,12 +19,15 @@ use tower_http::{
 mod room;
 
 use rand::distributions::{Distribution, Uniform};
-use room::{Room, ServerMsg};
+use room::{get_time_s, Room, ServerMsg};
+
+const GARBAGE_COLLECT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60 * 20); // 20 minutes
+const GC_ROOM_TIMEOUT_S: u64 = 60 * 60; // 1 hour
 
 // main object for server
 #[derive(Debug, Clone)]
 struct ServerState {
-    rooms: Arc<DashMap<String, Arc<Room>>>,
+    rooms: DashMap<String, Arc<Room>>,
     base_deck: Arc<Vec<String>>,
 }
 
@@ -40,7 +43,7 @@ impl ServerState {
         println!("Loaded {} cards", base_deck.len());
 
         Ok(ServerState {
-            rooms: Arc::new(DashMap::new()),
+            rooms: DashMap::new(),
             base_deck: Arc::new(base_deck),
         })
     }
@@ -74,6 +77,42 @@ impl ServerState {
     fn get_room(&self, room_id: &str) -> Option<Arc<Room>> {
         self.rooms.get(room_id).map(|r| r.value().clone())
     }
+
+    fn stats(&self) -> HashMap<String, (usize, u64)> {
+        self.rooms
+            .iter()
+            .map(|r| {
+                (
+                    r.key().clone(),
+                    (r.value().num_active(), r.value().last_access()),
+                )
+            })
+            .collect()
+    }
+
+    fn garbage_collect(&self) {
+        let mut to_remove = Vec::new();
+        for entry in &self.rooms {
+            // hasn't been accessed in an hour
+            if entry.value().num_active() == 0
+                && get_time_s() - entry.value().last_access() > GC_ROOM_TIMEOUT_S
+            {
+                to_remove.push(entry.key().clone());
+            }
+        }
+
+        println!("(gc) rooms to delete {:?}", to_remove);
+        for room_id in to_remove {
+            self.rooms.remove(&room_id);
+        }
+    }
+}
+
+async fn garbage_collect(state: Arc<ServerState>) {
+    loop {
+        tokio::time::sleep(GARBAGE_COLLECT_INTERVAL).await;
+        state.garbage_collect();
+    }
 }
 
 fn generate_room_id(length: usize) -> String {
@@ -86,11 +125,13 @@ fn generate_room_id(length: usize) -> String {
 
 #[tokio::main]
 async fn main() {
-    let state = ServerState::new().unwrap();
+    let state = Arc::new(ServerState::new().unwrap());
 
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG)
-        .init();
+    tokio::spawn(garbage_collect(state.clone()));
+
+    // tracing_subscriber::fmt()
+    //     .with_max_level(tracing::Level::DEBUG)
+    //     .init();
 
     let cors = CorsLayer::new()
         .allow_origin(Any)
@@ -99,8 +140,9 @@ async fn main() {
 
     let app = Router::new()
         .route("/ws", get(ws_handler))
-        .route("/create", post(create_room))
+        .route("/create", post(create_room_handler))
         .route("/exists", post(exists_handler))
+        .route("/stats", get(stats_handler))
         .route("/", get(root))
         .layer(TraceLayer::new_for_http())
         .layer(cors)
@@ -116,7 +158,7 @@ async fn main() {
     .unwrap();
 }
 
-async fn create_room(State(state): State<ServerState>) -> String {
+async fn create_room_handler(State(state): State<Arc<ServerState>>) -> String {
     let room = state.create_room().await;
     // json response with room id
 
@@ -131,7 +173,7 @@ async fn create_room(State(state): State<ServerState>) -> String {
 }
 
 async fn exists_handler(
-    State(state): State<ServerState>,
+    State(state): State<Arc<ServerState>>,
     Json(room_id): Json<String>,
 ) -> &'static str {
     if state.get_room(&room_id).is_some() {
@@ -141,15 +183,22 @@ async fn exists_handler(
     }
 }
 
+async fn stats_handler(State(state): State<Arc<ServerState>>) -> String {
+    serde_json::to_string(&state.stats()).unwrap()
+}
+
 async fn root() -> &'static str {
     "Hello, world!"
 }
 
-async fn ws_handler(ws: WebSocketUpgrade, State(state): State<ServerState>) -> impl IntoResponse {
+async fn ws_handler(
+    ws: WebSocketUpgrade,
+    State(state): State<Arc<ServerState>>,
+) -> impl IntoResponse {
     ws.on_upgrade(move |socket| handle_socket(socket, state))
 }
 
-async fn handle_socket(mut socket: WebSocket, state: ServerState) {
+async fn handle_socket(mut socket: WebSocket, state: Arc<ServerState>) {
     let res = initialize_socket(&mut socket, state).await;
 
     if let Err(e) = res {
@@ -157,7 +206,7 @@ async fn handle_socket(mut socket: WebSocket, state: ServerState) {
     }
 }
 
-async fn initialize_socket(socket: &mut WebSocket, state: ServerState) -> Result<()> {
+async fn initialize_socket(socket: &mut WebSocket, state: Arc<ServerState>) -> Result<()> {
     let msg = socket
         .recv()
         .await
